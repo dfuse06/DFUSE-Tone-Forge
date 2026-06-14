@@ -25,6 +25,7 @@ import androidx.compose.ui.unit.sp
 import com.example.dfusetoneforge.ui.theme.DfuseToneforgeTheme
 import kotlinx.coroutines.launch
 import java.io.File
+import android.content.Intent
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -188,7 +189,12 @@ fun ToneForgeHome() {
                         forgedFile = forgedFile,
                         statusText = statusText,
                         onEditAudioClick = {
-                            statusText = "Audio editor activity coming next"
+                            context.startActivity(
+                                android.content.Intent(
+                                    context,
+                                    AudioEditorActivity::class.java
+                                )
+                            )
                         },
                         onForgeClick = {
                             if (waveformFile == null) {

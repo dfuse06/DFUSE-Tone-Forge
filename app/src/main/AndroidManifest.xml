@@ -15,9 +15,18 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
         android:theme="@style/Theme.DfuseToneforge">
+
+        <activity
+            android:name=".AudioEditorActivity"
+            android:exported="false"
+            android:screenOrientation="landscape"
+            android:theme="@style/Theme.DfuseToneforge" />
+
+
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:screenOrientation="portrait"
             android:label="@string/app_name"
             android:theme="@style/Theme.DfuseToneforge"
             android:windowSoftInputMode="adjustResize">
