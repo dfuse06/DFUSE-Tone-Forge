@@ -1,10 +1,12 @@
 package com.example.dfusetoneforge
 
+import android.media.MediaMetadataRetriever
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
@@ -17,6 +19,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.dfusetoneforge.ui.theme.DfuseToneforgeTheme
+import java.io.File
 
 class AudioEditorActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -38,17 +41,30 @@ class AudioEditorActivity : ComponentActivity() {
         controller.systemBarsBehavior =
             androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
 
+        val audioPath = intent.getStringExtra("audioPath")
 
         setContent {
             DfuseToneforgeTheme {
-                AudioEditorScreen()
+                AudioEditorScreen(
+                    audioPath = audioPath,
+                    onBackClick = { finish() }
+                )
             }
         }
     }
 }
 
 @Composable
-fun AudioEditorScreen() {
+fun AudioEditorScreen(
+    audioPath: String?,
+    onBackClick: () -> Unit
+) {
+    val fileName = audioPath
+        ?.let { File(it).name }
+        ?: "No audio loaded"
+
+    val durationText = getAudioDurationText(audioPath)
+
     Surface(
         modifier = Modifier.fillMaxSize(),
         color = Color(0xFF090511)
@@ -59,9 +75,12 @@ fun AudioEditorScreen() {
                 .padding(22.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp)
         ) {
-            TopEditorBar()
+            TopEditorBar(onBackClick = onBackClick)
 
-            TrackInfoRow()
+            TrackInfoRow(
+                fileName = fileName,
+                durationText = durationText
+            )
 
             WaveformCard(
                 modifier = Modifier
@@ -75,7 +94,9 @@ fun AudioEditorScreen() {
 }
 
 @Composable
-fun TopEditorBar() {
+fun TopEditorBar(
+    onBackClick: () -> Unit
+) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically
@@ -84,7 +105,9 @@ fun TopEditorBar() {
             text = "‹ Back to Forge",
             color = Color.White,
             fontSize = 18.sp,
-            modifier = Modifier.weight(1f)
+            modifier = Modifier
+                .weight(1f)
+                .clickable { onBackClick() }
         )
 
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
@@ -102,7 +125,10 @@ fun TopEditorBar() {
             )
         }
 
-        Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.CenterEnd) {
+        Box(
+            modifier = Modifier.weight(1f),
+            contentAlignment = Alignment.CenterEnd
+        ) {
             OutlinedButton(onClick = {}) {
                 Text("▷ Play Full Track")
             }
@@ -111,7 +137,10 @@ fun TopEditorBar() {
 }
 
 @Composable
-fun TrackInfoRow() {
+fun TrackInfoRow(
+    fileName: String,
+    durationText: String
+) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(
@@ -119,36 +148,37 @@ fun TrackInfoRow() {
         )
     ) {
         Row(
-            modifier = Modifier.padding(18.dp),
+            modifier = Modifier.padding(12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Box(
                 modifier = Modifier
-                    .size(82.dp)
+                    .size(60.dp)
                     .background(Color(0xFF5B21B6)),
                 contentAlignment = Alignment.Center
             ) {
-                Text("🔨", fontSize = 32.sp)
+                Text("🔨", fontSize = 26.sp)
             }
 
-            Spacer(modifier = Modifier.width(18.dp))
+            Spacer(modifier = Modifier.width(12.dp))
 
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = "That supernova camo 😍 #bo7",
                     color = Color.White,
-                    fontSize = 22.sp,
+                    fontSize = 18.sp,
                     fontWeight = FontWeight.Bold
                 )
 
                 Text(
-                    text = "...web_audio.m4a",
+                    text = fileName,
                     color = Color(0xFFB8AEC7),
-                    fontSize = 15.sp
+                    fontSize = 13.sp,
+                    maxLines = 2
                 )
             }
 
-            StatBox("Duration", "3:47")
+            StatBox("Duration", durationText)
             StatBox("Format", "m4a")
             StatBox("Bitrate", "128 kbps")
         }
@@ -156,18 +186,32 @@ fun TrackInfoRow() {
 }
 
 @Composable
-fun StatBox(label: String, value: String) {
+fun StatBox(
+    label: String,
+    value: String
+) {
     Column(
-        modifier = Modifier.padding(horizontal = 18.dp),
+        modifier = Modifier.padding(horizontal = 10.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        Text(label, color = Color(0xFFB8AEC7), fontSize = 14.sp)
-        Text(value, color = Color.White, fontSize = 19.sp, fontWeight = FontWeight.Bold)
+        Text(
+            text = label,
+            color = Color(0xFFB8AEC7),
+            fontSize = 12.sp
+        )
+
+        Text(
+            text = value,
+            color = Color.White,
+            fontSize = 16.sp,
+            fontWeight = FontWeight.Bold
+        )
     }
 }
-
 @Composable
-fun WaveformCard(modifier: Modifier = Modifier) {
+fun WaveformCard(
+    modifier: Modifier = Modifier
+) {
     Card(
         modifier = modifier,
         colors = CardDefaults.cardColors(
@@ -183,7 +227,6 @@ fun WaveformCard(modifier: Modifier = Modifier) {
                 modifier = Modifier.fillMaxSize()
             )
 
-            // selection handles placeholders
             Box(
                 modifier = Modifier
                     .fillMaxHeight()
@@ -204,7 +247,9 @@ fun WaveformCard(modifier: Modifier = Modifier) {
 }
 
 @Composable
-fun FakeWaveform(modifier: Modifier = Modifier) {
+fun FakeWaveform(
+    modifier: Modifier = Modifier
+) {
     Canvas(modifier = modifier) {
         val centerY = size.height / 2
         val bars = 160
@@ -274,5 +319,26 @@ fun BottomControls() {
         Button(onClick = {}) {
             Text("✓ Done")
         }
+    }
+}
+
+fun getAudioDurationText(audioPath: String?): String {
+    if (audioPath == null) return "0:00"
+
+    return try {
+        val mmr = MediaMetadataRetriever()
+        mmr.setDataSource(audioPath)
+
+        val durationMs =
+            mmr.extractMetadata(
+                MediaMetadataRetriever.METADATA_KEY_DURATION
+            )?.toLongOrNull() ?: 0L
+
+        mmr.release()
+
+        val seconds = durationMs / 1000
+        "${seconds / 60}:${(seconds % 60).toString().padStart(2, '0')}"
+    } catch (e: Exception) {
+        "0:00"
     }
 }

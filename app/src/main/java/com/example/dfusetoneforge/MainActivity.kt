@@ -189,12 +189,17 @@ fun ToneForgeHome() {
                         forgedFile = forgedFile,
                         statusText = statusText,
                         onEditAudioClick = {
-                            context.startActivity(
-                                android.content.Intent(
-                                    context,
-                                    AudioEditorActivity::class.java
+                            waveformFile?.let { file ->
+                                context.startActivity(
+                                    android.content.Intent(
+                                        context,
+                                        AudioEditorActivity::class.java
+                                    ).putExtra(
+                                        "audioPath",
+                                        file.absolutePath
+                                    )
                                 )
-                            )
+                            }
                         },
                         onForgeClick = {
                             if (waveformFile == null) {
