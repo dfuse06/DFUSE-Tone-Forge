@@ -47,6 +47,8 @@ dependencies {
     implementation("androidx.media3:media3-transformer:1.8.0")
     implementation("androidx.media3:media3-effect:1.8.0")
     implementation("androidx.media3:media3-common:1.8.0")
+    implementation("androidx.compose.material:material-icons-extended")
+    implementation("androidx.compose.material:material-icons-extended")
 
 
     implementation(platform(libs.androidx.compose.bom))

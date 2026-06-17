@@ -1,45 +1,67 @@
 package com.example.dfusetoneforge
 
+import android.app.Activity
+import android.content.Intent
+import android.content.pm.ActivityInfo
+import android.media.MediaExtractor
+import android.media.MediaFormat
 import android.media.MediaMetadataRetriever
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.FastForward
+import androidx.compose.material.icons.filled.FastRewind
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import com.example.dfusetoneforge.ui.theme.DfuseToneforgeTheme
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import java.io.File
+import java.nio.ByteBuffer
+import kotlin.math.abs
+import kotlin.math.max
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import android.media.MediaPlayer
+import androidx.compose.ui.platform.LocalContext
 
 class AudioEditorActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        requestedOrientation =
-            android.content.pm.ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+        requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
 
-        androidx.core.view.WindowCompat.setDecorFitsSystemWindows(window, false)
+        WindowCompat.setDecorFitsSystemWindows(window, false)
 
-        val controller =
-            androidx.core.view.WindowInsetsControllerCompat(window, window.decorView)
-
+        val controller = WindowInsetsControllerCompat(window, window.decorView)
         controller.hide(
-            androidx.core.view.WindowInsetsCompat.Type.statusBars() or
-                    androidx.core.view.WindowInsetsCompat.Type.navigationBars()
+            WindowInsetsCompat.Type.statusBars() or
+                    WindowInsetsCompat.Type.navigationBars()
         )
-
         controller.systemBarsBehavior =
-            androidx.core.view.WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
 
         val audioPath = intent.getStringExtra("audioPath")
 
@@ -47,7 +69,16 @@ class AudioEditorActivity : ComponentActivity() {
             DfuseToneforgeTheme {
                 AudioEditorScreen(
                     audioPath = audioPath,
-                    onBackClick = { finish() }
+                    onBackClick = { finish() },
+                    onDoneClick = { startMs, endMs ->
+                        val result = Intent().apply {
+                            putExtra("startMs", startMs)
+                            putExtra("endMs", endMs)
+                        }
+
+                        setResult(Activity.RESULT_OK, result)
+                        finish()
+                    }
                 )
             }
         }
@@ -57,13 +88,38 @@ class AudioEditorActivity : ComponentActivity() {
 @Composable
 fun AudioEditorScreen(
     audioPath: String?,
-    onBackClick: () -> Unit
+    onBackClick: () -> Unit,
+    onDoneClick: (Long, Long) -> Unit
 ) {
-    val fileName = audioPath
-        ?.let { File(it).name }
-        ?: "No audio loaded"
+    val context = LocalContext.current
 
-    val durationText = getAudioDurationText(audioPath)
+    var mediaPlayer by remember {
+        mutableStateOf<MediaPlayer?>(null)
+    }
+
+
+    var isPlaying by remember {
+        mutableStateOf(false)
+    }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            mediaPlayer?.release()
+        }
+    }
+
+    val fileName = audioPath?.let { File(it).name } ?: "No audio loaded"
+    val audioInfo = remember(audioPath) { readEditorAudioInfo(audioPath) }
+
+    var startMs by remember(audioPath) { mutableLongStateOf(0L) }
+    var endMs by remember(audioPath, audioInfo.durationMs) {
+        mutableLongStateOf(audioInfo.durationMs.coerceAtLeast(1L))
+    }
+
+    LaunchedEffect(audioInfo.durationMs) {
+        startMs = 0L
+        endMs = audioInfo.durationMs.coerceAtLeast(1L)
+    }
 
     Surface(
         modifier = Modifier.fillMaxSize(),
@@ -72,23 +128,72 @@ fun AudioEditorScreen(
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(22.dp),
-            verticalArrangement = Arrangement.spacedBy(14.dp)
+                .padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             TopEditorBar(onBackClick = onBackClick)
 
             TrackInfoRow(
                 fileName = fileName,
-                durationText = durationText
+                durationText = audioInfo.durationText,
+                formatText = audioInfo.format,
+                bitrateText = audioInfo.bitrate
             )
 
             WaveformCard(
+                audioPath = audioPath,
+                startMs = startMs,
+                endMs = endMs,
+                durationMs = audioInfo.durationMs.coerceAtLeast(1L),
+                onTrimChanged = { newStart, newEnd ->
+                    startMs = newStart
+                    endMs = newEnd
+                },
                 modifier = Modifier
                     .fillMaxWidth()
                     .weight(1f)
             )
+            BottomControls(
+                startText = formatEditorDuration(startMs),
+                endText = formatEditorDuration(endMs),
+                isPlaying = isPlaying,
+                onPlayClick = {
+                    if (audioPath == null) return@BottomControls
 
-            BottomControls()
+                    try {
+                        if (mediaPlayer == null) {
+                            mediaPlayer = MediaPlayer().apply {
+                                setDataSource(audioPath)
+                                prepare()
+                            }
+                        }
+
+                        mediaPlayer?.let { player ->
+                            if (player.isPlaying) {
+                                player.pause()
+                                isPlaying = false
+                            } else {
+                                player.start()
+                                isPlaying = true
+
+                                player.setOnCompletionListener {
+                                    isPlaying = false
+                                }
+                            }
+                        }
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                    }
+                },
+                onResetClick = {
+                    startMs = 0L
+                    endMs = audioInfo.durationMs.coerceAtLeast(1L)
+                },
+                onDoneClick = {
+                    onDoneClick(startMs, endMs)
+
+                }
+            )
         }
     }
 }
@@ -102,9 +207,9 @@ fun TopEditorBar(
         verticalAlignment = Alignment.CenterVertically
     ) {
         Text(
-            text = "‹ Back to Forge",
+            text = "‹ Back",
             color = Color.White,
-            fontSize = 18.sp,
+            fontSize = 14.sp,
             modifier = Modifier
                 .weight(1f)
                 .clickable { onBackClick() }
@@ -114,14 +219,14 @@ fun TopEditorBar(
             Text(
                 text = "Audio Editor",
                 color = Color.White,
-                fontSize = 28.sp,
+                fontSize = 22.sp,
                 fontWeight = FontWeight.Bold
             )
 
             Text(
                 text = "Drag handles to select start and end",
                 color = Color(0xFFC8A7FF),
-                fontSize = 15.sp
+                fontSize = 11.sp
             )
         }
 
@@ -129,8 +234,12 @@ fun TopEditorBar(
             modifier = Modifier.weight(1f),
             contentAlignment = Alignment.CenterEnd
         ) {
-            OutlinedButton(onClick = {}) {
-                Text("▷ Play Full Track")
+            OutlinedButton(
+                onClick = {},
+                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+                border = BorderStroke(1.dp, Color(0xFF4D4658))
+            ) {
+                Text("▷ Play", fontSize = 12.sp)
             }
         }
     }
@@ -139,7 +248,9 @@ fun TopEditorBar(
 @Composable
 fun TrackInfoRow(
     fileName: String,
-    durationText: String
+    durationText: String,
+    formatText: String,
+    bitrateText: String
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -148,39 +259,42 @@ fun TrackInfoRow(
         )
     ) {
         Row(
-            modifier = Modifier.padding(12.dp),
+            modifier = Modifier.padding(8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Box(
                 modifier = Modifier
-                    .size(60.dp)
+                    .size(42.dp)
                     .background(Color(0xFF5B21B6)),
                 contentAlignment = Alignment.Center
             ) {
-                Text("🔨", fontSize = 26.sp)
+                Text("🔨", fontSize = 20.sp)
             }
 
-            Spacer(modifier = Modifier.width(12.dp))
+            Spacer(modifier = Modifier.width(8.dp))
 
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = "That supernova camo 😍 #bo7",
+                    text = "Track info",
                     color = Color.White,
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.Bold
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
 
                 Text(
-                    text = fileName,
+                    text = cleanEditorDisplayName(fileName),
                     color = Color(0xFFB8AEC7),
-                    fontSize = 13.sp,
-                    maxLines = 2
+                    fontSize = 11.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
                 )
             }
 
             StatBox("Duration", durationText)
-            StatBox("Format", "m4a")
-            StatBox("Bitrate", "128 kbps")
+            StatBox("Format", formatText)
+            StatBox("Bitrate", bitrateText)
         }
     }
 }
@@ -191,154 +305,396 @@ fun StatBox(
     value: String
 ) {
     Column(
-        modifier = Modifier.padding(horizontal = 10.dp),
+        modifier = Modifier.padding(horizontal = 6.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Text(
             text = label,
             color = Color(0xFFB8AEC7),
-            fontSize = 12.sp
+            fontSize = 9.sp
         )
 
         Text(
             text = value,
             color = Color.White,
-            fontSize = 16.sp,
+            fontSize = 12.sp,
             fontWeight = FontWeight.Bold
         )
     }
 }
+
 @Composable
 fun WaveformCard(
+    audioPath: String?,
+    startMs: Long,
+    endMs: Long,
+    durationMs: Long,
+    onTrimChanged: (Long, Long) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    var amplitudes by remember(audioPath) { mutableStateOf<List<Float>>(emptyList()) }
+    var draggingHandle by remember { mutableStateOf<TrimHandle?>(null) }
+
+    val safeDuration = durationMs.coerceAtLeast(1L)
+
+    val animatedStartProgress by animateFloatAsState(
+        targetValue = (startMs.toFloat() / safeDuration.toFloat()).coerceIn(0f, 1f),
+        animationSpec = tween(
+            durationMillis = 80,
+            easing = FastOutSlowInEasing
+        ),
+        label = "startHandle"
+    )
+
+    val animatedEndProgress by animateFloatAsState(
+        targetValue = (endMs.toFloat() / safeDuration.toFloat()).coerceIn(0f, 1f),
+        animationSpec = tween(
+            durationMillis = 80,
+            easing = FastOutSlowInEasing
+        ),
+        label = "endHandle"
+    )
+
+    LaunchedEffect(audioPath) {
+        amplitudes = loadWaveformAmplitudes(audioPath)
+    }
+
     Card(
         modifier = modifier,
         colors = CardDefaults.cardColors(
             containerColor = Color(0xFF15101D)
         )
     ) {
-        Box(
+        Canvas(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(18.dp)
+                .padding(10.dp)
+                .pointerInput(safeDuration) {
+                    detectDragGestures(
+                        onDragStart = { offset ->
+                            val width = size.width.toFloat().coerceAtLeast(1f)
+
+                            draggingHandle =
+                                if (offset.x < width / 2f) TrimHandle.START else TrimHandle.END
+                        },
+                        onDragEnd = {
+                            draggingHandle = null
+                        },
+                        onDragCancel = {
+                            draggingHandle = null
+                        },
+                        onDrag = { change, _ ->
+                            change.consume()
+
+                            val width = size.width.toFloat().coerceAtLeast(1f)
+                            val minGap = 1_500L
+
+                            val touchedMs = ((change.position.x / width) * safeDuration)
+                                .toLong()
+                                .coerceIn(0L, safeDuration)
+
+                            when (draggingHandle) {
+                                TrimHandle.START -> {
+                                    val newStart = touchedMs.coerceIn(0L, endMs - minGap)
+                                    onTrimChanged(newStart, endMs)
+                                }
+
+                                TrimHandle.END -> {
+                                    val newEnd = touchedMs.coerceIn(startMs + minGap, safeDuration)
+                                    onTrimChanged(startMs, newEnd)
+                                }
+
+                                null -> Unit
+                            }
+                        }
+                    )
+
+                }
         ) {
-            FakeWaveform(
-                modifier = Modifier.fillMaxSize()
+            val width = size.width
+            val height = size.height
+            val centerY = height / 2f
+
+            val startX = animatedStartProgress * width
+            val endX = animatedEndProgress * width
+
+            drawRect(Color(0xFF120A1B))
+
+            if (amplitudes.isNotEmpty()) {
+                val barWidth = width / amplitudes.size
+
+                amplitudes.forEachIndexed { i, amp ->
+                    val x = i * barWidth + barWidth / 2f
+                    val barHeight = height * amp.coerceIn(0.08f, 1f)
+
+                    val isSelected = x in startX..endX
+                    val color = if (isSelected) {
+                        Color(0xFFB178FF)
+                    } else {
+                        Color(0xFF5F5A6D)
+                    }
+
+                    drawLine(
+                        color = color,
+                        start = Offset(x, centerY - barHeight / 2f),
+                        end = Offset(x, centerY + barHeight / 2f),
+                        strokeWidth = max(2.2f, barWidth * 0.45f),
+                        cap = StrokeCap.Round
+                    )
+                }
+            }
+
+            drawRect(
+                color = Color(0x33B178FF),
+                topLeft = Offset(startX, 0f),
+                size = Size(endX - startX, height)
             )
 
-            Box(
-                modifier = Modifier
-                    .fillMaxHeight()
-                    .width(10.dp)
-                    .offset(x = 170.dp)
-                    .background(Color(0xFFC8A7FF))
+            val handleWidth = 18f
+
+            drawRoundRect(
+                color = Color(0xFFC8A7FF),
+                topLeft = Offset(startX - handleWidth / 2f, 0f),
+                size = Size(handleWidth, height),
+                cornerRadius = androidx.compose.ui.geometry.CornerRadius(8f, 8f)
             )
 
-            Box(
-                modifier = Modifier
-                    .fillMaxHeight()
-                    .width(10.dp)
-                    .offset(x = 650.dp)
-                    .background(Color(0xFFC8A7FF))
+            drawRoundRect(
+                color = Color(0xFFC8A7FF),
+                topLeft = Offset(endX - handleWidth / 2f, 0f),
+                size = Size(handleWidth, height),
+                cornerRadius = androidx.compose.ui.geometry.CornerRadius(8f, 8f)
             )
         }
     }
 }
-
-@Composable
-fun FakeWaveform(
-    modifier: Modifier = Modifier
-) {
-    Canvas(modifier = modifier) {
-        val centerY = size.height / 2
-        val bars = 160
-        val barWidth = size.width / bars
-
-        for (i in 0 until bars) {
-            val heightPercent = when {
-                i % 7 == 0 -> 0.85f
-                i % 5 == 0 -> 0.65f
-                i % 3 == 0 -> 0.45f
-                else -> 0.30f
-            }
-
-            val barHeight = size.height * heightPercent
-            val x = i * barWidth
-
-            val color = if (i in 35..125) {
-                Color(0xFFB178FF)
-            } else {
-                Color(0xFF5F5A6D)
-            }
-
-            drawLine(
-                color = color,
-                start = Offset(x, centerY - barHeight / 2),
-                end = Offset(x, centerY + barHeight / 2),
-                strokeWidth = 3f,
-                cap = StrokeCap.Round
-            )
-        }
-    }
+enum class TrimHandle {
+    START,
+    END
 }
 
 @Composable
-fun BottomControls() {
+fun BottomControls(
+    startText: String,
+    endText: String,
+    isPlaying: Boolean,
+    onPlayClick: () -> Unit,
+    onResetClick: () -> Unit,
+    onDoneClick: () -> Unit
+){
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        OutlinedButton(onClick = {}) {
-            Text("Reset Selection")
+        OutlinedButton(
+            onClick = onResetClick,
+            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
+            border = BorderStroke(1.dp, Color(0xFF4D4658))
+        ) {
+            Text("Reset", fontSize = 12.sp)
         }
+
+        Spacer(modifier = Modifier.width(12.dp))
+
+        Text(
+            text = "$startText  →  $endText",
+            color = Color(0xFFB8AEC7),
+            fontSize = 12.sp
+        )
 
         Spacer(modifier = Modifier.weight(1f))
 
-        OutlinedButton(onClick = {}) {
-            Text("⏪")
+        OutlinedButton(
+            onClick = {},
+            border = BorderStroke(1.dp, Color(0xFF7C3AED))
+        ) {
+            Icon(
+                imageVector = Icons.Default.FastRewind,
+                contentDescription = "Rewind",
+                tint = Color(0xFFC8A7FF)
+            )
         }
 
-        Spacer(modifier = Modifier.width(18.dp))
+        Spacer(modifier = Modifier.width(10.dp))
 
         Button(
-            onClick = {},
-            modifier = Modifier.size(72.dp)
+            onClick = onPlayClick,
+            modifier = Modifier.size(54.dp),
+            contentPadding = PaddingValues(0.dp)
         ) {
-            Text("▶")
+            Text(
+                if (isPlaying) "⏸" else "▶",
+                fontSize = 18.sp
+            )
         }
 
-        Spacer(modifier = Modifier.width(18.dp))
+        Spacer(modifier = Modifier.width(10.dp))
 
-        OutlinedButton(onClick = {}) {
-            Text("⏩")
+        OutlinedButton(
+            onClick = {},
+            border = BorderStroke(1.dp, Color(0xFF7C3AED))
+        ) {
+            Icon(
+                imageVector = Icons.Default.FastForward,
+                contentDescription = "Forward",
+                tint = Color(0xFFC8A7FF)
+            )
         }
 
         Spacer(modifier = Modifier.weight(1f))
 
-        Button(onClick = {}) {
-            Text("✓ Done")
+        Button(
+            onClick = onDoneClick,
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+        ) {
+            Text("✓ Done", fontSize = 12.sp)
         }
     }
 }
 
-fun getAudioDurationText(audioPath: String?): String {
-    if (audioPath == null) return "0:00"
+suspend fun loadWaveformAmplitudes(
+    audioPath: String?,
+    bars: Int = 190
+): List<Float> = withContext(Dispatchers.IO) {
+    if (audioPath == null) return@withContext emptyList()
+
+    val extractor = MediaExtractor()
+
+    try {
+        extractor.setDataSource(audioPath)
+
+        var audioTrackIndex = -1
+
+        for (i in 0 until extractor.trackCount) {
+            val format = extractor.getTrackFormat(i)
+            val mime = format.getString(MediaFormat.KEY_MIME) ?: ""
+
+            if (mime.startsWith("audio/")) {
+                audioTrackIndex = i
+                break
+            }
+        }
+
+        if (audioTrackIndex == -1) {
+            return@withContext emptyList()
+        }
+
+        extractor.selectTrack(audioTrackIndex)
+
+        val sampleSizes = mutableListOf<Int>()
+        val buffer = ByteBuffer.allocate(256 * 1024)
+
+        while (true) {
+            buffer.clear()
+            val size = extractor.readSampleData(buffer, 0)
+
+            if (size <= 0) break
+
+            sampleSizes.add(size)
+            extractor.advance()
+        }
+
+        if (sampleSizes.isEmpty()) {
+            return@withContext emptyList()
+        }
+
+        val grouped = MutableList(bars) { 0f }
+        val counts = MutableList(bars) { 0 }
+
+        sampleSizes.forEachIndexed { index, size ->
+            val bucket = ((index.toFloat() / sampleSizes.size.toFloat()) * bars)
+                .toInt()
+                .coerceIn(0, bars - 1)
+
+            grouped[bucket] += size.toFloat()
+            counts[bucket] += 1
+        }
+
+        val averaged = grouped.mapIndexed { index, value ->
+            if (counts[index] == 0) 0f else value / counts[index]
+        }
+
+        val maxValue = averaged.maxOrNull()?.coerceAtLeast(1f) ?: 1f
+
+        averaged.map { value ->
+            (value / maxValue).coerceIn(0.08f, 1f)
+        }
+    } catch (e: Exception) {
+        emptyList()
+    } finally {
+        extractor.release()
+    }
+}
+
+data class EditorAudioInfo(
+    val durationText: String,
+    val durationMs: Long,
+    val format: String,
+    val bitrate: String
+)
+
+fun readEditorAudioInfo(audioPath: String?): EditorAudioInfo {
+    if (audioPath == null) {
+        return EditorAudioInfo(
+            durationText = "0:00",
+            durationMs = 0L,
+            format = "--",
+            bitrate = "--"
+        )
+    }
+
+    val file = File(audioPath)
+    val retriever = MediaMetadataRetriever()
 
     return try {
-        val mmr = MediaMetadataRetriever()
-        mmr.setDataSource(audioPath)
+        retriever.setDataSource(audioPath)
 
         val durationMs =
-            mmr.extractMetadata(
-                MediaMetadataRetriever.METADATA_KEY_DURATION
-            )?.toLongOrNull() ?: 0L
+            retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+                ?.toLongOrNull()
+                ?: 0L
 
-        mmr.release()
+        val bitrate =
+            retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_BITRATE)
+                ?.toLongOrNull()
+                ?.let { "${it / 1000}" }
+                ?: "--"
 
-        val seconds = durationMs / 1000
-        "${seconds / 60}:${(seconds % 60).toString().padStart(2, '0')}"
+        EditorAudioInfo(
+            durationText = formatEditorDuration(durationMs),
+            durationMs = durationMs,
+            format = file.extension.ifBlank { "audio" },
+            bitrate = bitrate
+        )
     } catch (e: Exception) {
-        "0:00"
+        EditorAudioInfo(
+            durationText = "0:00",
+            durationMs = 0L,
+            format = file.extension.ifBlank { "audio" },
+            bitrate = "--"
+        )
+    } finally {
+        retriever.release()
     }
+}
+
+private fun cleanEditorDisplayName(name: String): String {
+    return name
+        .removeSuffix(".m4a")
+        .removeSuffix(".mp4")
+        .removeSuffix(".webm")
+        .removeSuffix(".opus")
+        .replace("-web_audio", "")
+        .replace("-android_audio", "")
+        .replace("_audio", "")
+        .replace("_ringtone", "")
+        .trim()
+}
+
+private fun formatEditorDuration(ms: Long): String {
+    val totalSeconds = ms / 1000
+    val minutes = totalSeconds / 60
+    val seconds = totalSeconds % 60
+
+    return "$minutes:${seconds.toString().padStart(2, '0')}"
 }

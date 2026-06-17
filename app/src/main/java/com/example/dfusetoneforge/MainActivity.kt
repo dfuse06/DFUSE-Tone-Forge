@@ -1,11 +1,20 @@
 package com.example.dfusetoneforge
 
+import android.content.Context
+import android.content.Intent
+import android.media.MediaMetadataRetriever
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
@@ -14,18 +23,29 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.dfusetoneforge.ui.theme.DfuseToneforgeTheme
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.io.File
-import android.content.Intent
+import androidx.compose.ui.draw.blur
+import androidx.compose.ui.text.style.TextAlign
+import android.widget.Toast
+import androidx.compose.ui.draw.shadow
+import androidx.compose.material3.HorizontalDivider
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -42,73 +62,73 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 fun ToneForgeHome() {
+    var dfuseTapCount by remember { mutableIntStateOf(0) }
+    var showDfuseMode by remember { mutableStateOf(false) }
+
     val context = LocalContext.current
-    val prefs = remember {
-        context.getSharedPreferences(
-            "dfuse_tone_forge_prefs",
-            android.content.Context.MODE_PRIVATE
-        )
-    }
-
-    var showDisclaimer by remember {
-        mutableStateOf(!prefs.getBoolean("disclaimerAccepted", false))
-    }
-
-    if (showDisclaimer) {
-        AlertDialog(
-            onDismissRequest = {},
-            title = { Text("⚒️ Welcome to the Forge") },
-            text = {
-                Text(
-                    "Forge responsibly.\n\nOnly use audio from videos or content you own, created, or have permission to use. You are responsible for following copyright laws and platform terms."
-                )
-            },
-            confirmButton = {
-                Button(
-                    onClick = {
-                        prefs.edit()
-                            .putBoolean("disclaimerAccepted", true)
-                            .apply()
-
-                        showDisclaimer = false
-                    }
-                ) {
-                    Text("Enter the Forge")
-                }
-            }
-        )
-    }
-
-    val pagerState = rememberPagerState(pageCount = { 2 })
     val scope = rememberCoroutineScope()
+    val pagerState = rememberPagerState(pageCount = { 2 })
 
     var linkText by remember { mutableStateOf("") }
-    var startMs by remember { mutableLongStateOf(12_000L) }
-    var endMs by remember { mutableLongStateOf(42_000L) }
-    val durationMs = 60_000L
-
     var statusText by remember { mutableStateOf("") }
     var isWorking by remember { mutableStateOf(false) }
 
-    var downloadedFile by remember { mutableStateOf<File?>(null) }
+    var startMs by remember { mutableLongStateOf(12_000L) }
+    var endMs by remember { mutableLongStateOf(42_000L) }
+
     var waveformFile by remember { mutableStateOf<File?>(null) }
     var forgedFile by remember { mutableStateOf<File?>(null) }
+
+  
+    val messages = listOf(
+        "Signal detected...",
+        "Accessing Forge...",
+        "Decrypting audio cores...",
+        "Loading DFUSE protocol...",
+        "Bypassing safeguards...",
+        "System breach detected..."
+    )
 
     Box(
         modifier = Modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.background)
-            .padding(20.dp)
-            .navigationBarsPadding()
     ) {
-        Column(modifier = Modifier.fillMaxSize()) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(20.dp)
+                .navigationBarsPadding()
+                .blur(if (showDfuseMode) 20.dp else 0.dp)
+        ) {
             Spacer(modifier = Modifier.height(30.dp))
 
             Text(
                 text = "DFUSE",
                 color = MaterialTheme.colorScheme.primary,
                 fontSize = 42.sp,
-                fontWeight = FontWeight.Black
+                fontWeight = FontWeight.Black,
+                modifier = Modifier.clickable {
+                    dfuseTapCount++
+
+                    if (dfuseTapCount < 7) {
+                        Toast.makeText(
+                            context,
+                            messages[dfuseTapCount - 1],
+                            Toast.LENGTH_SHORT
+                        ).show()
+                    } else {
+                        dfuseTapCount = 0
+
+                        Toast.makeText(
+                            context,
+                            "⚡ DFUSE MODE ACTIVATED ⚡",
+                            Toast.LENGTH_LONG
+                        ).show()
+
+                        showDfuseMode = true
+                    }
+                }
             )
 
             Text(
@@ -151,7 +171,7 @@ fun ToneForgeHome() {
                         statusText = statusText,
                         onDownloadClick = {
                             if (linkText.isBlank()) {
-                                statusText = "Paste a YouTube link first"
+                                statusText = "Paste a link first"
                                 return@DownloadsPage
                             }
 
@@ -161,7 +181,6 @@ fun ToneForgeHome() {
                                     statusText = "Downloading video/audio..."
 
                                     val rawFile = downloadYoutubeAudio(context, linkText)
-                                    downloadedFile = rawFile
 
                                     statusText = "Ripping audio..."
 
@@ -169,10 +188,11 @@ fun ToneForgeHome() {
 
                                     waveformFile = audioFile
                                     forgedFile = null
+
                                     startMs = 12_000L
                                     endMs = 42_000L
 
-                                    statusText = "Audio ready.\nLoaded: ${audioFile.name}"
+                                    statusText = "Audio ready.\nLoaded: ${cleanDisplayName(audioFile)}"
 
                                     pagerState.animateScrollToPage(1)
                                 } catch (e: Exception) {
@@ -191,18 +211,17 @@ fun ToneForgeHome() {
                         onEditAudioClick = {
                             waveformFile?.let { file ->
                                 context.startActivity(
-                                    android.content.Intent(
+                                    Intent(
                                         context,
                                         AudioEditorActivity::class.java
-                                    ).putExtra(
-                                        "audioPath",
-                                        file.absolutePath
-                                    )
+                                    ).putExtra("audioPath", file.absolutePath)
                                 )
                             }
                         },
                         onForgeClick = {
-                            if (waveformFile == null) {
+                            val audioFile = waveformFile
+
+                            if (audioFile == null) {
                                 statusText = "Download and rip audio first"
                                 return@ForgePage
                             }
@@ -214,17 +233,22 @@ fun ToneForgeHome() {
 
                                     val ringtone = forgeRingtone(
                                         context = context,
-                                        inputFile = waveformFile!!,
+                                        inputFile = audioFile,
                                         startMs = startMs,
                                         endMs = endMs
                                     )
 
                                     val finalName =
-                                        waveformFile!!.nameWithoutExtension + "_ringtone.m4a"
+                                        audioFile.nameWithoutExtension + "_ringtone.m4a"
 
-                                    saveAudioToDownloads(context, ringtone, finalName)
+                                    saveAudioToDownloads(
+                                        context = context,
+                                        sourceFile = ringtone,
+                                        displayName = finalName
+                                    )
 
                                     forgedFile = ringtone
+
                                     statusText =
                                         "Ringtone forged.\nSaved to Ringtones/DFUSE Tone Forge\nFile: $finalName"
                                 } catch (e: Exception) {
@@ -238,9 +262,110 @@ fun ToneForgeHome() {
                 }
             }
         }
+
+        if (showDfuseMode) {
+            DfuseModeOverlay(
+                onDismiss = { showDfuseMode = false }
+            )
+        }
     }
 }
+@Composable
+fun DfuseModeOverlay(
+    onDismiss: () -> Unit
+) {
+    LaunchedEffect(Unit) {
+        delay(3500)
+        onDismiss()
+    }
 
+    val infiniteTransition = rememberInfiniteTransition(label = "dfusePulse")
+
+    val pulseScale by infiniteTransition.animateFloat(
+        initialValue = 0.98f,
+        targetValue = 1.02f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(420),
+            repeatMode = RepeatMode.Reverse
+        ),
+        label = "pulseScale"
+    )
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color.Black.copy(alpha = 0.62f))
+            .clickable { onDismiss() },
+        contentAlignment = Alignment.Center
+    ) {
+        Card(
+            modifier = Modifier
+                .padding(24.dp)
+                .fillMaxWidth()
+                .scale(pulseScale)
+                .shadow(
+                    elevation = 18.dp,
+                    shape = RoundedCornerShape(28.dp),
+                    ambientColor = Color(0xFF9F6FFF),
+                    spotColor = Color(0xFF9F6FFF)
+                ),
+            shape = RoundedCornerShape(28.dp),
+            colors = CardDefaults.cardColors(
+                containerColor = Color(0xDD12091F)
+            )
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 24.dp, vertical = 28.dp),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                Text(
+                    text = "DFUSE MODE ⚒️",
+                    color = Color(0xFFC8A7FF),
+                    fontSize = 28.sp,
+                    fontWeight = FontWeight.Black,
+                    textAlign = TextAlign.Center
+                )
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                Text(
+                    text = "SYSTEM ACCESS GRANTED",
+                    color = Color.White,
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center
+                )
+
+                Spacer(modifier = Modifier.height(20.dp))
+
+                HorizontalDivider(
+                    color = Color(0x66C8A7FF)
+                )
+
+                Spacer(modifier = Modifier.height(20.dp))
+
+                Text(
+                    text = "DKW | LKW | JKW",
+                    color = Color(0xFFC8A7FF),
+                    fontSize = 22.sp,
+                    fontWeight = FontWeight.Black,
+                    textAlign = TextAlign.Center
+                )
+
+                Spacer(modifier = Modifier.height(14.dp))
+
+                Text(
+                    text = "DFUSE Tone Forge",
+                    color = Color.White.copy(alpha = 0.7f),
+                    fontSize = 13.sp,
+                    textAlign = TextAlign.Center
+                )
+            }
+        }
+    }
+}
 @Composable
 fun DownloadsPage(
     linkText: String,
@@ -307,6 +432,10 @@ fun ForgePage(
 ) {
     val scrollState = rememberScrollState()
 
+    val audioInfo = remember(waveformFile) {
+        readAudioInfo(waveformFile)
+    }
+
     Column(
         verticalArrangement = Arrangement.spacedBy(18.dp),
         modifier = Modifier
@@ -322,71 +451,15 @@ fun ForgePage(
         )
 
         Text(
-            text = waveformFile?.name ?: "No audio loaded yet",
+            text = waveformFile?.let { cleanDisplayName(it) } ?: "No audio loaded yet",
             color = MaterialTheme.colorScheme.onSurfaceVariant,
-            fontSize = 14.sp
+            fontSize = 14.sp,
+            maxLines = 3,
+            overflow = TextOverflow.Ellipsis
         )
 
         if (waveformFile != null) {
-            Card(
-                modifier = Modifier.fillMaxWidth(),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
-                )
-            ) {
-                Row(
-                    modifier = Modifier.padding(18.dp)
-                ) {
-                    Image(
-                        painter = painterResource(R.drawable.dfuse_cosmos),
-                        contentDescription = null,
-                        modifier = Modifier
-                            .size(150.dp)
-                            .clip(RoundedCornerShape(16.dp))
-                    )
-
-                    Spacer(modifier = Modifier.width(16.dp))
-
-                    Column {
-                        Text(
-                            text = "Format",
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-
-                        Text(
-                            text = "m4a",
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 20.sp
-                        )
-
-                        Spacer(modifier = Modifier.height(12.dp))
-
-                        Text(
-                            text = "Duration",
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-
-                        Text(
-                            text = "3:47",
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 20.sp
-                        )
-
-                        Spacer(modifier = Modifier.height(12.dp))
-
-                        Text(
-                            text = "Bitrate",
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-
-                        Text(
-                            text = "128 kbps",
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 20.sp
-                        )
-                    }
-                }
-            }
+            AudioInfoCard(audioInfo = audioInfo)
         }
 
         Row(
@@ -425,13 +498,169 @@ fun ForgePage(
                 )
             ) {
                 Text(
-                    text = "Forge \uD83D\uDD28",
+                    text = "Forge 🔨",
                     fontWeight = FontWeight.Bold,
                     fontSize = 15.sp
                 )
             }
         }
+
+        if (forgedFile != null) {
+            Text(
+                text = "Forged file:\n${forgedFile.name}",
+                color = MaterialTheme.colorScheme.primary,
+                fontSize = 14.sp
+            )
+        }
+
+        if (statusText.isNotBlank()) {
+            Text(
+                text = statusText,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = 14.sp
+            )
+        }
     }
+}
+
+@Composable
+fun AudioInfoCard(
+    audioInfo: AudioInfo
+) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceContainerHigh
+        ),
+        shape = RoundedCornerShape(18.dp)
+    ) {
+        Row(
+            modifier = Modifier.padding(18.dp)
+        ) {
+            Image(
+                painter = painterResource(R.drawable.dfuse_cosmos),
+                contentDescription = null,
+                modifier = Modifier
+                    .size(150.dp)
+                    .clip(RoundedCornerShape(16.dp))
+            )
+
+            Spacer(modifier = Modifier.width(16.dp))
+
+            Column {
+                AudioStat(
+                    label = "Format",
+                    value = audioInfo.format
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                AudioStat(
+                    label = "Duration",
+                    value = audioInfo.duration
+                )
+
+                Spacer(modifier = Modifier.height(12.dp))
+
+                AudioStat(
+                    label = "Bitrate",
+                    value = audioInfo.bitrate
+                )
+            }
+        }
+    }
+}
+
+@Composable
+fun AudioStat(
+    label: String,
+    value: String
+) {
+    Text(
+        text = label,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        fontSize = 14.sp
+    )
+
+    Text(
+        text = value,
+        color = MaterialTheme.colorScheme.onSurface,
+        fontWeight = FontWeight.Bold,
+        fontSize = 20.sp
+    )
+}
+
+data class AudioInfo(
+    val format: String,
+    val duration: String,
+    val bitrate: String
+)
+
+fun readAudioInfo(file: File?): AudioInfo {
+    if (file == null) {
+        return AudioInfo(
+            format = "--",
+            duration = "0:00",
+            bitrate = "--"
+        )
+    }
+
+    val retriever = MediaMetadataRetriever()
+
+    return try {
+        retriever.setDataSource(file.absolutePath)
+
+        val durationMs = retriever
+            .extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
+            ?.toLongOrNull()
+            ?: 0L
+
+        val bitrateRaw = retriever
+            .extractMetadata(MediaMetadataRetriever.METADATA_KEY_BITRATE)
+            ?.toLongOrNull()
+
+        val bitrateText =
+            if (bitrateRaw != null && bitrateRaw > 0) {
+                "${bitrateRaw / 1000} kbps"
+            } else {
+                "Unknown"
+            }
+
+        AudioInfo(
+            format = file.extension.ifBlank { "audio" },
+            duration = formatMs(durationMs),
+            bitrate = bitrateText
+        )
+    } catch (e: Exception) {
+        AudioInfo(
+            format = file.extension.ifBlank { "audio" },
+            duration = "0:00",
+            bitrate = "Unknown"
+        )
+    } finally {
+        retriever.release()
+    }
+}
+
+private fun cleanDisplayName(file: File): String {
+    return file.name
+        .removeSuffix(".m4a")
+        .removeSuffix(".mp4")
+        .removeSuffix(".webm")
+        .removeSuffix(".opus")
+        .replace("-web_audio", "")
+        .replace("-android_audio", "")
+        .replace("_audio", "")
+        .replace("_ringtone", "")
+        .trim()
+}
+
+private fun formatMs(ms: Long): String {
+    val totalSeconds = ms / 1000
+    val minutes = totalSeconds / 60
+    val seconds = totalSeconds % 60
+
+    return "$minutes:${seconds.toString().padStart(2, '0')}"
 }
 
 @Preview(showBackground = true)
