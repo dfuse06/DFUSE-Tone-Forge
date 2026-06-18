@@ -6,10 +6,17 @@ import android.net.Uri
 import android.provider.MediaStore
 import java.io.File
 
+enum class SaveAudioType {
+    RINGTONE,
+    NOTIFICATION,
+    ALARM
+}
+
 fun saveAudioToDownloads(
     context: Context,
     sourceFile: File,
-    displayName: String
+    displayName: String,
+    type: SaveAudioType
 ): Uri {
     val resolver = context.contentResolver
 
@@ -20,19 +27,30 @@ fun saveAudioToDownloads(
         .removeSuffix(".opus")
         .removeSuffix(".m4a") + ".m4a"
 
+    val folder = when (type) {
+        SaveAudioType.RINGTONE -> "Ringtones/DFUSE Tone Forge/"
+        SaveAudioType.NOTIFICATION -> "Notifications/DFUSE Tone Forge/"
+        SaveAudioType.ALARM -> "Alarms/DFUSE Tone Forge/"
+    }
+
     val values = ContentValues().apply {
         put(MediaStore.Audio.Media.DISPLAY_NAME, cleanName)
         put(MediaStore.Audio.Media.TITLE, cleanName.removeSuffix(".m4a"))
         put(MediaStore.Audio.Media.MIME_TYPE, "audio/mp4")
-        put(MediaStore.Audio.Media.RELATIVE_PATH, "Ringtones/DFUSE Tone Forge/")
-        put(MediaStore.Audio.Media.IS_MUSIC, true)
+        put(MediaStore.Audio.Media.RELATIVE_PATH, folder)
+
+        put(MediaStore.Audio.Media.IS_MUSIC, false)
+        put(MediaStore.Audio.Media.IS_RINGTONE, type == SaveAudioType.RINGTONE)
+        put(MediaStore.Audio.Media.IS_NOTIFICATION, type == SaveAudioType.NOTIFICATION)
+        put(MediaStore.Audio.Media.IS_ALARM, type == SaveAudioType.ALARM)
+
         put(MediaStore.Audio.Media.IS_PENDING, 1)
     }
 
     val uri = resolver.insert(
         MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
         values
-    ) ?: throw Exception("Could not create audio file in Downloads")
+    ) ?: throw Exception("Could not create audio file")
 
     try {
         resolver.openOutputStream(uri, "w")?.use { output ->

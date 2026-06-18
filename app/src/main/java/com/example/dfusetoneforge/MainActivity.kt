@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.media.MediaMetadataRetriever
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -25,27 +26,27 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.dfusetoneforge.ui.theme.DfuseToneforgeTheme
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.io.File
-import androidx.compose.ui.draw.blur
-import androidx.compose.ui.text.style.TextAlign
-import android.widget.Toast
-import androidx.compose.ui.draw.shadow
-import androidx.compose.material3.HorizontalDivider
+import android.app.Activity
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -62,10 +63,55 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 fun ToneForgeHome() {
+    val context = LocalContext.current
+
+    val prefs = context.getSharedPreferences(
+        "dfuse_prefs",
+        Context.MODE_PRIVATE
+    )
+
+    var showDisclaimer by remember {
+        mutableStateOf(!prefs.getBoolean("disclaimerAccepted", false))
+    }
+
+    var showSaveChoice by remember { mutableStateOf(false) }
+
+    if (showDisclaimer) {
+        AlertDialog(
+            onDismissRequest = {},
+            title = {
+                Text(
+                    text = "⚒️ Welcome to the Forge",
+                    modifier = Modifier.fillMaxWidth(),
+                    textAlign = TextAlign.Center,
+                    fontSize = 22.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                Text(
+                    "Forge responsibly.\n\nOnly use audio from videos or content you own, created, or have permission to use. You are responsible for following copyright laws and platform terms."
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        prefs.edit()
+                            .putBoolean("disclaimerAccepted", true)
+                            .apply()
+
+                        showDisclaimer = false
+                    }
+                ) {
+                    Text("Enter the Forge")
+                }
+            }
+        )
+    }
+
     var dfuseTapCount by remember { mutableIntStateOf(0) }
     var showDfuseMode by remember { mutableStateOf(false) }
 
-    val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val pagerState = rememberPagerState(pageCount = { 2 })
 
@@ -78,8 +124,26 @@ fun ToneForgeHome() {
 
     var waveformFile by remember { mutableStateOf<File?>(null) }
     var forgedFile by remember { mutableStateOf<File?>(null) }
+    var hasTrim by remember { mutableStateOf(false) }
 
-  
+    val editAudioLauncher =
+        rememberLauncherForActivityResult(
+            ActivityResultContracts.StartActivityForResult()
+        ) { result ->
+            if (result.resultCode == Activity.RESULT_OK) {
+                result.data?.let { data ->
+
+                    startMs = data.getLongExtra("startMs", startMs)
+                    endMs = data.getLongExtra("endMs", endMs)
+
+                    hasTrim = true
+
+                    statusText =
+                        "Trim saved.\nStart: ${startMs / 1000}s\nEnd: ${endMs / 1000}s"
+                }
+            }
+        }
+
     val messages = listOf(
         "Signal detected...",
         "Accessing Forge...",
@@ -191,6 +255,7 @@ fun ToneForgeHome() {
 
                                     startMs = 12_000L
                                     endMs = 42_000L
+                                    hasTrim = false
 
                                     statusText = "Audio ready.\nLoaded: ${cleanDisplayName(audioFile)}"
 
@@ -208,9 +273,12 @@ fun ToneForgeHome() {
                         waveformFile = waveformFile,
                         forgedFile = forgedFile,
                         statusText = statusText,
+                        hasTrim = hasTrim,
+                        startMs = startMs,
+                        endMs = endMs,
                         onEditAudioClick = {
                             waveformFile?.let { file ->
-                                context.startActivity(
+                                editAudioLauncher.launch(
                                     Intent(
                                         context,
                                         AudioEditorActivity::class.java
@@ -219,48 +287,64 @@ fun ToneForgeHome() {
                             }
                         },
                         onForgeClick = {
-                            val audioFile = waveformFile
-
-                            if (audioFile == null) {
+                            if (waveformFile == null) {
                                 statusText = "Download and rip audio first"
                                 return@ForgePage
                             }
 
-                            scope.launch {
-                                try {
-                                    isWorking = true
-                                    statusText = "Forging ringtone..."
-
-                                    val ringtone = forgeRingtone(
-                                        context = context,
-                                        inputFile = audioFile,
-                                        startMs = startMs,
-                                        endMs = endMs
-                                    )
-
-                                    val finalName =
-                                        audioFile.nameWithoutExtension + "_ringtone.m4a"
-
-                                    saveAudioToDownloads(
-                                        context = context,
-                                        sourceFile = ringtone,
-                                        displayName = finalName
-                                    )
-
-                                    forgedFile = ringtone
-
-                                    statusText =
-                                        "Ringtone forged.\nSaved to Ringtones/DFUSE Tone Forge\nFile: $finalName"
-                                } catch (e: Exception) {
-                                    statusText = "Forge failed:\n${e.message}"
-                                } finally {
-                                    isWorking = false
-                                }
-                            }
+                            showSaveChoice = true
                         }
                     )
                 }
             }
+        }
+
+        if (showSaveChoice) {
+            SaveChoiceDialog(
+                onDismiss = { showSaveChoice = false },
+                onSaveAsRingtone = {
+                    showSaveChoice = false
+                    forgeAndSaveAudio(
+                        context = context,
+                        scope = scope,
+                        audioFile = waveformFile,
+                        startMs = startMs,
+                        endMs = endMs,
+                        saveType = SaveAudioType.RINGTONE,
+                        onStatus = { statusText = it },
+                        onWorking = { isWorking = it },
+                        onForged = { forgedFile = it }
+                    )
+                },
+                onSaveAsNotification = {
+                    showSaveChoice = false
+                    forgeAndSaveAudio(
+                        context = context,
+                        scope = scope,
+                        audioFile = waveformFile,
+                        startMs = startMs,
+                        endMs = endMs,
+                        saveType = SaveAudioType.NOTIFICATION,
+                        onStatus = { statusText = it },
+                        onWorking = { isWorking = it },
+                        onForged = { forgedFile = it }
+                    )
+                },
+                onSaveAsAlarm = {
+                    showSaveChoice = false
+                    forgeAndSaveAudio(
+                        context = context,
+                        scope = scope,
+                        audioFile = waveformFile,
+                        startMs = startMs,
+                        endMs = endMs,
+                        saveType = SaveAudioType.ALARM,
+                        onStatus = { statusText = it },
+                        onWorking = { isWorking = it },
+                        onForged = { forgedFile = it }
+                    )
+                }
+            )
         }
 
         if (showDfuseMode) {
@@ -270,6 +354,128 @@ fun ToneForgeHome() {
         }
     }
 }
+
+@Composable
+fun SaveChoiceDialog(
+    onDismiss: () -> Unit,
+    onSaveAsRingtone: () -> Unit,
+    onSaveAsNotification: () -> Unit,
+    onSaveAsAlarm: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                text = "Save forged audio as",
+                modifier = Modifier.fillMaxWidth(),
+                textAlign = TextAlign.Center,
+                fontWeight = FontWeight.Bold
+            )
+        },
+        text = {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Button(
+                    onClick = onSaveAsRingtone,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Ringtone")
+                }
+
+                Button(
+                    onClick = onSaveAsNotification,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Notification")
+                }
+
+                Button(
+                    onClick = onSaveAsAlarm,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text("Alarm")
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        }
+    )
+}
+
+fun forgeAndSaveAudio(
+    context: Context,
+    scope: CoroutineScope,
+    audioFile: File?,
+    startMs: Long,
+    endMs: Long,
+    saveType: SaveAudioType,
+    onStatus: (String) -> Unit,
+    onWorking: (Boolean) -> Unit,
+    onForged: (File) -> Unit
+) {
+    if (audioFile == null) {
+        onStatus("Download and rip audio first")
+        return
+    }
+
+    scope.launch {
+        try {
+            onWorking(true)
+
+            val typeText = when (saveType) {
+                SaveAudioType.RINGTONE -> "ringtone"
+                SaveAudioType.NOTIFICATION -> "notification"
+                SaveAudioType.ALARM -> "alarm"
+            }
+
+            onStatus("Forging $typeText...")
+
+            val forged = forgeRingtone(
+                context = context,
+                inputFile = audioFile,
+                startMs = startMs,
+                endMs = endMs
+            )
+
+            val finalName = audioFile.nameWithoutExtension + "_$typeText.m4a"
+
+            saveAudioToDownloads(
+                context = context,
+                sourceFile = forged,
+                displayName = finalName,
+                type = saveType
+            )
+
+            onForged(forged)
+
+            val folderText = when (saveType) {
+                SaveAudioType.RINGTONE -> "Ringtones"
+                SaveAudioType.NOTIFICATION -> "Notifications"
+                SaveAudioType.ALARM -> "Alarms"
+            }
+
+            onStatus(
+                "Forged.\nSaved to $folderText/DFUSE Tone Forge\nFile: $finalName"
+            )
+
+            Toast.makeText(
+                context,
+                "Saved to $folderText/DFUSE Tone Forge",
+                Toast.LENGTH_LONG
+            ).show()
+        } catch (e: Exception) {
+            onStatus("Forge failed:\n${e.message}")
+        } finally {
+            onWorking(false)
+        }
+    }
+}
+
 @Composable
 fun DfuseModeOverlay(
     onDismiss: () -> Unit
@@ -366,6 +572,7 @@ fun DfuseModeOverlay(
         }
     }
 }
+
 @Composable
 fun DownloadsPage(
     linkText: String,
@@ -427,9 +634,12 @@ fun ForgePage(
     waveformFile: File?,
     forgedFile: File?,
     statusText: String,
+    hasTrim: Boolean,
+    startMs: Long,
+    endMs: Long,
     onEditAudioClick: () -> Unit,
     onForgeClick: () -> Unit
-) {
+){
     val scrollState = rememberScrollState()
 
     val audioInfo = remember(waveformFile) {
@@ -444,7 +654,7 @@ fun ForgePage(
             .padding(top = 18.dp, bottom = 140.dp)
     ) {
         Text(
-            text = "Forge Ringtone",
+            text = "Forge Audio",
             color = MaterialTheme.colorScheme.onBackground,
             fontSize = 24.sp,
             fontWeight = FontWeight.Bold
@@ -459,7 +669,16 @@ fun ForgePage(
         )
 
         if (waveformFile != null) {
-            AudioInfoCard(audioInfo = audioInfo)
+            val displayInfo =
+                if (hasTrim) {
+                    audioInfo.copy(
+                        duration = formatMs(endMs - startMs)
+                    )
+                } else {
+                    audioInfo
+                }
+
+            AudioInfoCard(audioInfo = displayInfo)
         }
 
         Row(
@@ -652,6 +871,8 @@ private fun cleanDisplayName(file: File): String {
         .replace("-android_audio", "")
         .replace("_audio", "")
         .replace("_ringtone", "")
+        .replace("_notification", "")
+        .replace("_alarm", "")
         .trim()
 }
 

@@ -6,6 +6,7 @@ import android.content.pm.ActivityInfo
 import android.media.MediaExtractor
 import android.media.MediaFormat
 import android.media.MediaMetadataRetriever
+import android.media.MediaPlayer
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -18,6 +19,8 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.FastForward
 import androidx.compose.material.icons.filled.FastRewind
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -36,16 +39,14 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import com.example.dfusetoneforge.ui.theme.DfuseToneforgeTheme
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.nio.ByteBuffer
 import kotlin.math.abs
 import kotlin.math.max
-import androidx.compose.animation.core.FastOutSlowInEasing
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.tween
-import android.media.MediaPlayer
-import androidx.compose.ui.platform.LocalContext
+
 
 class AudioEditorActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -91,20 +92,16 @@ fun AudioEditorScreen(
     onBackClick: () -> Unit,
     onDoneClick: (Long, Long) -> Unit
 ) {
-    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
 
-    var mediaPlayer by remember {
-        mutableStateOf<MediaPlayer?>(null)
-    }
-
-
-    var isPlaying by remember {
-        mutableStateOf(false)
-    }
+    var mediaPlayer by remember { mutableStateOf<MediaPlayer?>(null) }
+    var isPlaying by remember { mutableStateOf(false) }
+    var isLoopPlaying by remember { mutableStateOf(false) }
 
     DisposableEffect(Unit) {
         onDispose {
             mediaPlayer?.release()
+            mediaPlayer = null
         }
     }
 
@@ -121,6 +118,13 @@ fun AudioEditorScreen(
         endMs = audioInfo.durationMs.coerceAtLeast(1L)
     }
 
+    fun stopCurrentPlayer() {
+        mediaPlayer?.release()
+        mediaPlayer = null
+        isPlaying = false
+        isLoopPlaying = false
+    }
+
     Surface(
         modifier = Modifier.fillMaxSize(),
         color = Color(0xFF090511)
@@ -131,7 +135,46 @@ fun AudioEditorScreen(
                 .padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            TopEditorBar(onBackClick = onBackClick)
+            TopEditorBar(
+                onBackClick = {
+                    stopCurrentPlayer()
+                    onBackClick()
+                },
+                isPlaying = isPlaying,
+                isLoopPlaying = isLoopPlaying,
+                onPlayClick = {
+                    if (audioPath == null) return@TopEditorBar
+
+                    mediaPlayer?.let { player ->
+                        if (player.isPlaying && !isLoopPlaying) {
+                            player.pause()
+                            isPlaying = false
+                            return@TopEditorBar
+                        }
+                    }
+
+                    try {
+                        stopCurrentPlayer()
+
+                        mediaPlayer = MediaPlayer().apply {
+                            setDataSource(audioPath)
+                            prepare()
+                            start()
+
+                            setOnCompletionListener {
+                                isPlaying = false
+                                isLoopPlaying = false
+                            }
+                        }
+
+                        isPlaying = true
+                        isLoopPlaying = false
+                    } catch (e: Exception) {
+                        e.printStackTrace()
+                        stopCurrentPlayer()
+                    }
+                }
+            )
 
             TrackInfoRow(
                 fileName = fileName,
@@ -153,55 +196,85 @@ fun AudioEditorScreen(
                     .fillMaxWidth()
                     .weight(1f)
             )
+
             BottomControls(
                 startText = formatEditorDuration(startMs),
                 endText = formatEditorDuration(endMs),
-                isPlaying = isPlaying,
-                onPlayClick = {
+                isLoopPlaying = isLoopPlaying,
+
+                onLoopPlayClick = {
                     if (audioPath == null) return@BottomControls
 
+                    mediaPlayer?.let { player ->
+                        if (player.isPlaying && isLoopPlaying) {
+                            player.pause()
+                            isPlaying = false
+                            isLoopPlaying = false
+                            return@BottomControls
+                        }
+                    }
+
                     try {
-                        if (mediaPlayer == null) {
-                            mediaPlayer = MediaPlayer().apply {
-                                setDataSource(audioPath)
-                                prepare()
-                            }
+                        stopCurrentPlayer()
+
+                        val loopStart = startMs
+                        val loopEnd = endMs
+
+                        mediaPlayer = MediaPlayer().apply {
+                            setDataSource(audioPath)
+                            prepare()
+                            seekTo(loopStart.toInt())
+                            start()
                         }
 
-                        mediaPlayer?.let { player ->
-                            if (player.isPlaying) {
-                                player.pause()
-                                isPlaying = false
-                            } else {
-                                player.start()
-                                isPlaying = true
+                        isPlaying = true
+                        isLoopPlaying = true
 
-                                player.setOnCompletionListener {
+                        val player = mediaPlayer
+
+                        scope.launch {
+                            while (player != null && player.isPlaying && isLoopPlaying) {
+
+                                if (player.currentPosition >= loopEnd) {
+                                    player.pause()
+                                    player.seekTo(loopStart.toInt())
+
                                     isPlaying = false
+                                    isLoopPlaying = false
+                                    break
                                 }
+
+                                delay(40)
                             }
                         }
                     } catch (e: Exception) {
                         e.printStackTrace()
+                        stopCurrentPlayer()
                     }
                 },
+
+
                 onResetClick = {
+                    stopCurrentPlayer()
                     startMs = 0L
                     endMs = audioInfo.durationMs.coerceAtLeast(1L)
                 },
-                onDoneClick = {
-                    onDoneClick(startMs, endMs)
 
+                onDoneClick = {
+                    stopCurrentPlayer()
+                    onDoneClick(startMs, endMs)
                 }
             )
         }
     }
 }
-
 @Composable
 fun TopEditorBar(
-    onBackClick: () -> Unit
-) {
+    onBackClick: () -> Unit,
+    isPlaying: Boolean,
+    isLoopPlaying: Boolean,
+    onPlayClick: () -> Unit
+){
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically
@@ -215,7 +288,10 @@ fun TopEditorBar(
                 .clickable { onBackClick() }
         )
 
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Column(
+            modifier = Modifier.weight(1f),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
             Text(
                 text = "Audio Editor",
                 color = Color.White,
@@ -235,11 +311,15 @@ fun TopEditorBar(
             contentAlignment = Alignment.CenterEnd
         ) {
             OutlinedButton(
-                onClick = {},
+                onClick = onPlayClick,
                 contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                border = BorderStroke(1.dp, Color(0xFF4D4658))
+                border = BorderStroke(1.dp, Color(0xFF7C3AED))
             ) {
-                Text("▷ Play", fontSize = 12.sp)
+                Text(
+                    text = if (isPlaying && !isLoopPlaying) "⏸ Pause All" else "▷ Play All",
+                    color = Color(0xFFC8A7FF),
+                    fontSize = 12.sp
+                )
             }
         }
     }
@@ -336,24 +416,8 @@ fun WaveformCard(
     var draggingHandle by remember { mutableStateOf<TrimHandle?>(null) }
 
     val safeDuration = durationMs.coerceAtLeast(1L)
-
-    val animatedStartProgress by animateFloatAsState(
-        targetValue = (startMs.toFloat() / safeDuration.toFloat()).coerceIn(0f, 1f),
-        animationSpec = tween(
-            durationMillis = 80,
-            easing = FastOutSlowInEasing
-        ),
-        label = "startHandle"
-    )
-
-    val animatedEndProgress by animateFloatAsState(
-        targetValue = (endMs.toFloat() / safeDuration.toFloat()).coerceIn(0f, 1f),
-        animationSpec = tween(
-            durationMillis = 80,
-            easing = FastOutSlowInEasing
-        ),
-        label = "endHandle"
-    )
+    val currentStartMs by rememberUpdatedState(startMs)
+    val currentEndMs by rememberUpdatedState(endMs)
 
     LaunchedEffect(audioPath) {
         amplitudes = loadWaveformAmplitudes(audioPath)
@@ -361,9 +425,7 @@ fun WaveformCard(
 
     Card(
         modifier = modifier,
-        colors = CardDefaults.cardColors(
-            containerColor = Color(0xFF15101D)
-        )
+        colors = CardDefaults.cardColors(containerColor = Color(0xFF15101D))
     ) {
         Canvas(
             modifier = Modifier
@@ -374,15 +436,18 @@ fun WaveformCard(
                         onDragStart = { offset ->
                             val width = size.width.toFloat().coerceAtLeast(1f)
 
+                            val startX = (currentStartMs.toFloat() / safeDuration.toFloat()) * width
+                            val endX = (currentEndMs.toFloat() / safeDuration.toFloat()) * width
+
                             draggingHandle =
-                                if (offset.x < width / 2f) TrimHandle.START else TrimHandle.END
+                                if (abs(offset.x - startX) <= abs(offset.x - endX)) {
+                                    TrimHandle.START
+                                } else {
+                                    TrimHandle.END
+                                }
                         },
-                        onDragEnd = {
-                            draggingHandle = null
-                        },
-                        onDragCancel = {
-                            draggingHandle = null
-                        },
+                        onDragEnd = { draggingHandle = null },
+                        onDragCancel = { draggingHandle = null },
                         onDrag = { change, _ ->
                             change.consume()
 
@@ -395,28 +460,32 @@ fun WaveformCard(
 
                             when (draggingHandle) {
                                 TrimHandle.START -> {
-                                    val newStart = touchedMs.coerceIn(0L, endMs - minGap)
-                                    onTrimChanged(newStart, endMs)
+                                    val maxStart = currentEndMs - minGap
+                                    val newStart = touchedMs.coerceIn(0L, maxStart)
+                                    onTrimChanged(newStart, currentEndMs)
                                 }
 
                                 TrimHandle.END -> {
-                                    val newEnd = touchedMs.coerceIn(startMs + minGap, safeDuration)
-                                    onTrimChanged(startMs, newEnd)
+                                    val minEnd = currentStartMs + minGap
+                                    val newEnd = touchedMs.coerceIn(minEnd, safeDuration)
+                                    onTrimChanged(currentStartMs, newEnd)
                                 }
 
                                 null -> Unit
                             }
                         }
                     )
-
                 }
         ) {
             val width = size.width
             val height = size.height
             val centerY = height / 2f
 
-            val startX = animatedStartProgress * width
-            val endX = animatedEndProgress * width
+            val startProgress = (startMs.toFloat() / safeDuration.toFloat()).coerceIn(0f, 1f)
+            val endProgress = (endMs.toFloat() / safeDuration.toFloat()).coerceIn(0f, 1f)
+
+            val startX = startProgress * width
+            val endX = endProgress * width
 
             drawRect(Color(0xFF120A1B))
 
@@ -428,11 +497,7 @@ fun WaveformCard(
                     val barHeight = height * amp.coerceIn(0.08f, 1f)
 
                     val isSelected = x in startX..endX
-                    val color = if (isSelected) {
-                        Color(0xFFB178FF)
-                    } else {
-                        Color(0xFF5F5A6D)
-                    }
+                    val color = if (isSelected) Color(0xFFB178FF) else Color(0xFF5F5A6D)
 
                     drawLine(
                         color = color,
@@ -468,6 +533,7 @@ fun WaveformCard(
         }
     }
 }
+
 enum class TrimHandle {
     START,
     END
@@ -477,21 +543,21 @@ enum class TrimHandle {
 fun BottomControls(
     startText: String,
     endText: String,
-    isPlaying: Boolean,
-    onPlayClick: () -> Unit,
+    isLoopPlaying: Boolean,
+    onLoopPlayClick: () -> Unit,
     onResetClick: () -> Unit,
     onDoneClick: () -> Unit
-){
+) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically
     ) {
+
         OutlinedButton(
             onClick = onResetClick,
-            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
             border = BorderStroke(1.dp, Color(0xFF4D4658))
         ) {
-            Text("Reset", fontSize = 12.sp)
+            Text("Reset")
         }
 
         Spacer(modifier = Modifier.width(12.dp))
@@ -504,50 +570,33 @@ fun BottomControls(
 
         Spacer(modifier = Modifier.weight(1f))
 
+
         OutlinedButton(
-            onClick = {},
+            onClick = onLoopPlayClick,
+            modifier = Modifier.size(72.dp),
+            contentPadding = PaddingValues(0.dp),
             border = BorderStroke(1.dp, Color(0xFF7C3AED))
         ) {
             Icon(
-                imageVector = Icons.Default.FastRewind,
-                contentDescription = "Rewind",
+                imageVector =
+                    if (isLoopPlaying)
+                        Icons.Default.Pause
+                    else
+                        Icons.Default.PlayArrow,
+                contentDescription = null,
+                modifier = Modifier.size(34.dp),
                 tint = Color(0xFFC8A7FF)
-            )
-        }
 
-        Spacer(modifier = Modifier.width(10.dp))
-
-        Button(
-            onClick = onPlayClick,
-            modifier = Modifier.size(54.dp),
-            contentPadding = PaddingValues(0.dp)
-        ) {
-            Text(
-                if (isPlaying) "⏸" else "▶",
-                fontSize = 18.sp
-            )
-        }
-
-        Spacer(modifier = Modifier.width(10.dp))
-
-        OutlinedButton(
-            onClick = {},
-            border = BorderStroke(1.dp, Color(0xFF7C3AED))
-        ) {
-            Icon(
-                imageVector = Icons.Default.FastForward,
-                contentDescription = "Forward",
-                tint = Color(0xFFC8A7FF)
             )
         }
 
         Spacer(modifier = Modifier.weight(1f))
 
+
         Button(
-            onClick = onDoneClick,
-            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
+            onClick = onDoneClick
         ) {
-            Text("✓ Done", fontSize = 12.sp)
+            Text("✓ Done")
         }
     }
 }
