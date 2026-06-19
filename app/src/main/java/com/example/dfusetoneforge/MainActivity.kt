@@ -47,6 +47,7 @@ import java.io.File
 import android.app.Activity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import android.os.Build
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -196,7 +197,7 @@ fun ToneForgeHome() {
             )
 
             Text(
-                text = "Tone Forge",
+                text = "Tone Forge Beta",
                 color = MaterialTheme.colorScheme.onBackground,
                 fontSize = 30.sp,
                 fontWeight = FontWeight.Bold
@@ -459,8 +460,15 @@ fun forgeAndSaveAudio(
                 SaveAudioType.ALARM -> "Alarms"
             }
 
+            val samsungNote =
+                if (DeviceSupport.isSamsung) {
+                    "\n\nSamsung Galaxy detected ✅"
+                } else {
+                    ""
+                }
+
             onStatus(
-                "Forged.\nSaved to $folderText/DFUSE Tone Forge\nFile: $finalName"
+                "Forged.\nSaved to $folderText/DFUSE Tone Forge\nFile: $finalName$samsungNote"
             )
 
             Toast.makeText(

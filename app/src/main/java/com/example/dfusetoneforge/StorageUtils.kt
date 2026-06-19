@@ -5,6 +5,7 @@ import android.content.Context
 import android.net.Uri
 import android.provider.MediaStore
 import java.io.File
+import android.os.Environment
 
 enum class SaveAudioType {
     RINGTONE,
@@ -28,9 +29,14 @@ fun saveAudioToDownloads(
         .removeSuffix(".m4a") + ".m4a"
 
     val folder = when (type) {
-        SaveAudioType.RINGTONE -> "Ringtones/DFUSE Tone Forge/"
-        SaveAudioType.NOTIFICATION -> "Notifications/DFUSE Tone Forge/"
-        SaveAudioType.ALARM -> "Alarms/DFUSE Tone Forge/"
+        SaveAudioType.RINGTONE ->
+            "${Environment.DIRECTORY_RINGTONES}/DFUSE Tone Forge/"
+
+        SaveAudioType.NOTIFICATION ->
+            "${Environment.DIRECTORY_NOTIFICATIONS}/DFUSE Tone Forge/"
+
+        SaveAudioType.ALARM ->
+            "${Environment.DIRECTORY_ALARMS}/DFUSE Tone Forge/"
     }
 
     val values = ContentValues().apply {
