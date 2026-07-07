@@ -17,8 +17,6 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.FastForward
-import androidx.compose.material.icons.filled.FastRewind
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.*
@@ -43,9 +41,11 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
-import java.nio.ByteBuffer
 import kotlin.math.abs
 import kotlin.math.max
+import android.media.MediaCodec
+import kotlin.math.sqrt
+import androidx.compose.ui.graphics.nativeCanvas
 
 
 class AudioEditorActivity : ComponentActivity() {
@@ -418,9 +418,12 @@ fun WaveformCard(
     val safeDuration = durationMs.coerceAtLeast(1L)
     val currentStartMs by rememberUpdatedState(startMs)
     val currentEndMs by rememberUpdatedState(endMs)
+    var isWaveformLoading by remember(audioPath) { mutableStateOf(false) }
 
     LaunchedEffect(audioPath) {
+        isWaveformLoading = true
         amplitudes = loadWaveformAmplitudes(audioPath)
+        isWaveformLoading = false
     }
 
     Card(
@@ -489,9 +492,24 @@ fun WaveformCard(
 
             drawRect(Color(0xFF120A1B))
 
+            if (isWaveformLoading) {
+                drawContext.canvas.nativeCanvas.drawText(
+                    "Loading waveform...",
+                    width / 2f,
+                    height / 2f,
+                    android.graphics.Paint().apply {
+                        color = android.graphics.Color.WHITE
+                        textAlign = android.graphics.Paint.Align.CENTER
+                        textSize = 34f
+                        isAntiAlias = true
+                    }
+                )
+                return@Canvas
+            }
+
+
             if (amplitudes.isNotEmpty()) {
                 val barWidth = width / amplitudes.size
-
                 amplitudes.forEachIndexed { i, amp ->
                     val x = i * barWidth + barWidth / 2f
                     val barHeight = height * amp.coerceIn(0.08f, 1f)
@@ -548,62 +566,65 @@ fun BottomControls(
     onResetClick: () -> Unit,
     onDoneClick: () -> Unit
 ) {
-    Row(
+    Box(
         modifier = Modifier.fillMaxWidth(),
-        verticalAlignment = Alignment.CenterVertically
+        contentAlignment = Alignment.Center
     ) {
-
-        OutlinedButton(
-            onClick = onResetClick,
-            border = BorderStroke(1.dp, Color(0xFF4D4658))
+        Row(
+            modifier = Modifier.align(Alignment.CenterStart),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Text("Reset")
+            OutlinedButton(
+                onClick = onResetClick,
+                border = BorderStroke(1.dp, Color(0xFF4D4658))
+            ) {
+                Text("Reset")
+            }
+
+            Spacer(modifier = Modifier.width(12.dp))
+
+            Text(
+                text = "$startText  →  $endText",
+                color = Color(0xFFB8AEC7),
+                fontSize = 12.sp
+            )
         }
-
-        Spacer(modifier = Modifier.width(12.dp))
-
-        Text(
-            text = "$startText  →  $endText",
-            color = Color(0xFFB8AEC7),
-            fontSize = 12.sp
-        )
-
-        Spacer(modifier = Modifier.weight(1f))
-
 
         OutlinedButton(
             onClick = onLoopPlayClick,
-            modifier = Modifier.size(72.dp),
+            modifier = Modifier
+                .align(Alignment.Center)
+                .size(72.dp),
             contentPadding = PaddingValues(0.dp),
             border = BorderStroke(1.dp, Color(0xFF7C3AED))
         ) {
             Icon(
-                imageVector =
-                    if (isLoopPlaying)
-                        Icons.Default.Pause
-                    else
-                        Icons.Default.PlayArrow,
+                imageVector = if (isLoopPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
                 contentDescription = null,
                 modifier = Modifier.size(34.dp),
                 tint = Color(0xFFC8A7FF)
-
             )
         }
 
-        Spacer(modifier = Modifier.weight(1f))
-
-
         Button(
-            onClick = onDoneClick
+            onClick = onDoneClick,
+            modifier = Modifier.align(Alignment.CenterEnd)
         ) {
             Text("✓ Done")
         }
     }
 }
 
+
+data class EditorAudioInfo(
+    val durationText: String,
+    val durationMs: Long,
+    val format: String,
+    val bitrate: String
+)
 suspend fun loadWaveformAmplitudes(
     audioPath: String?,
-    bars: Int = 190
+    bars: Int = 900
 ): List<Float> = withContext(Dispatchers.IO) {
     if (audioPath == null) return@withContext emptyList()
 
@@ -612,76 +633,126 @@ suspend fun loadWaveformAmplitudes(
     try {
         extractor.setDataSource(audioPath)
 
-        var audioTrackIndex = -1
+        var trackIndex = -1
+        var format: MediaFormat? = null
 
         for (i in 0 until extractor.trackCount) {
-            val format = extractor.getTrackFormat(i)
-            val mime = format.getString(MediaFormat.KEY_MIME) ?: ""
+            val f = extractor.getTrackFormat(i)
+            val mime = f.getString(MediaFormat.KEY_MIME) ?: ""
 
             if (mime.startsWith("audio/")) {
-                audioTrackIndex = i
+                trackIndex = i
+                format = f
                 break
             }
         }
 
-        if (audioTrackIndex == -1) {
-            return@withContext emptyList()
-        }
+        if (trackIndex == -1 || format == null) return@withContext emptyList()
 
-        extractor.selectTrack(audioTrackIndex)
+        extractor.selectTrack(trackIndex)
 
-        val sampleSizes = mutableListOf<Int>()
-        val buffer = ByteBuffer.allocate(256 * 1024)
+        val mime = format.getString(MediaFormat.KEY_MIME) ?: return@withContext emptyList()
+        val codec = MediaCodec.createDecoderByType(mime)
+        codec.configure(format, null, null, 0)
+        codec.start()
 
-        while (true) {
-            buffer.clear()
-            val size = extractor.readSampleData(buffer, 0)
-
-            if (size <= 0) break
-
-            sampleSizes.add(size)
-            extractor.advance()
-        }
-
-        if (sampleSizes.isEmpty()) {
-            return@withContext emptyList()
-        }
-
-        val grouped = MutableList(bars) { 0f }
+        val amplitudes = MutableList(bars) { 0f }
         val counts = MutableList(bars) { 0 }
 
-        sampleSizes.forEachIndexed { index, size ->
-            val bucket = ((index.toFloat() / sampleSizes.size.toFloat()) * bars)
-                .toInt()
-                .coerceIn(0, bars - 1)
+        val durationUs =
+            if (format.containsKey(MediaFormat.KEY_DURATION))
+                format.getLong(MediaFormat.KEY_DURATION)
+            else 1L
 
-            grouped[bucket] += size.toFloat()
-            counts[bucket] += 1
+        var inputDone = false
+        var outputDone = false
+        val bufferInfo = MediaCodec.BufferInfo()
+
+        while (!outputDone) {
+            if (!inputDone) {
+                val inputIndex = codec.dequeueInputBuffer(10_000)
+
+                if (inputIndex >= 0) {
+                    val inputBuffer = codec.getInputBuffer(inputIndex)
+                    inputBuffer?.clear()
+
+                    val sampleSize = extractor.readSampleData(inputBuffer!!, 0)
+
+                    if (sampleSize < 0) {
+                        codec.queueInputBuffer(
+                            inputIndex,
+                            0,
+                            0,
+                            0L,
+                            MediaCodec.BUFFER_FLAG_END_OF_STREAM
+                        )
+                        inputDone = true
+                    } else {
+                        codec.queueInputBuffer(
+                            inputIndex,
+                            0,
+                            sampleSize,
+                            extractor.sampleTime,
+                            0
+                        )
+                        extractor.advance()
+                    }
+                }
+            }
+
+            val outputIndex = codec.dequeueOutputBuffer(bufferInfo, 10_000)
+
+            if (outputIndex >= 0) {
+                val outputBuffer = codec.getOutputBuffer(outputIndex)
+
+                if (outputBuffer != null && bufferInfo.size > 0) {
+                    outputBuffer.position(bufferInfo.offset)
+                    outputBuffer.limit(bufferInfo.offset + bufferInfo.size)
+
+                    var sum = 0.0
+                    var sampleCount = 0
+
+                    while (outputBuffer.remaining() >= 2) {
+                        val sample = outputBuffer.short.toInt()
+                        sum += sample * sample
+                        sampleCount++
+                    }
+
+                    if (sampleCount > 0) {
+                        val rms = sqrt(sum / sampleCount).toFloat() / Short.MAX_VALUE
+
+                        val bucket = ((bufferInfo.presentationTimeUs.toFloat() / durationUs.toFloat()) * bars)
+                            .toInt()
+                            .coerceIn(0, bars - 1)
+
+                        amplitudes[bucket] = max(amplitudes[bucket], rms)
+                        counts[bucket] += 1
+                    }
+                }
+
+                codec.releaseOutputBuffer(outputIndex, false)
+
+                if (bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
+                    outputDone = true
+                }
+            }
         }
 
-        val averaged = grouped.mapIndexed { index, value ->
-            if (counts[index] == 0) 0f else value / counts[index]
-        }
+        codec.stop()
+        codec.release()
 
-        val maxValue = averaged.maxOrNull()?.coerceAtLeast(1f) ?: 1f
+        val maxValue = amplitudes.maxOrNull()?.coerceAtLeast(0.001f) ?: 0.001f
 
-        averaged.map { value ->
-            (value / maxValue).coerceIn(0.08f, 1f)
+        amplitudes.map { amp ->
+            (amp / maxValue).coerceIn(0.02f, 1f)
         }
     } catch (e: Exception) {
+        e.printStackTrace()
         emptyList()
     } finally {
         extractor.release()
     }
 }
-
-data class EditorAudioInfo(
-    val durationText: String,
-    val durationMs: Long,
-    val format: String,
-    val bitrate: String
-)
-
 fun readEditorAudioInfo(audioPath: String?): EditorAudioInfo {
     if (audioPath == null) {
         return EditorAudioInfo(
