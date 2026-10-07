@@ -41,15 +41,25 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.dfusetoneforge.ui.theme.DfuseToneforgeTheme
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.io.File
 import android.app.Activity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.lifecycle.lifecycleScope
 import android.os.Build
 
 class MainActivity : ComponentActivity() {
+    override fun onResume() {
+        super.onResume()
+        lifecycleScope.launch {
+            val message = withContext(Dispatchers.IO) { resumePendingSound(this@MainActivity) }
+            message?.let { Toast.makeText(this@MainActivity, it, Toast.LENGTH_LONG).show() }
+        }
+    }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -76,6 +86,11 @@ fun ToneForgeHome() {
     }
 
     var showSaveChoice by remember { mutableStateOf(false) }
+    var applyNow by remember { mutableStateOf(false) }
+    val storageLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) showSaveChoice = true
+        else Toast.makeText(context, "Storage permission is needed to save sounds on this Android version.", Toast.LENGTH_LONG).show()
+    }
 
     if (showDisclaimer) {
         AlertDialog(
@@ -120,8 +135,8 @@ fun ToneForgeHome() {
     var statusText by remember { mutableStateOf("") }
     var isWorking by remember { mutableStateOf(false) }
 
-    var startMs by remember { mutableLongStateOf(12_000L) }
-    var endMs by remember { mutableLongStateOf(42_000L) }
+    var startMs by remember { mutableLongStateOf(0L) }
+    var endMs by remember { mutableLongStateOf(0L) }
 
     var waveformFile by remember { mutableStateOf<File?>(null) }
     var forgedFile by remember { mutableStateOf<File?>(null) }
@@ -197,7 +212,7 @@ fun ToneForgeHome() {
             )
 
             Text(
-                text = "Tone Forge Beta",
+                text = "Tone Forge 0.6 Beta",
                 color = MaterialTheme.colorScheme.onBackground,
                 fontSize = 30.sp,
                 fontWeight = FontWeight.Bold
@@ -254,8 +269,8 @@ fun ToneForgeHome() {
                                     waveformFile = audioFile
                                     forgedFile = null
 
-                                    startMs = 12_000L
-                                    endMs = 42_000L
+                                    startMs = 0L
+                                    endMs = withContext(Dispatchers.IO) { readEditorAudioInfo(audioFile.absolutePath).durationMs }
                                     hasTrim = false
 
                                     statusText = "Audio ready.\nLoaded: ${cleanDisplayName(audioFile)}"
@@ -278,22 +293,28 @@ fun ToneForgeHome() {
                         startMs = startMs,
                         endMs = endMs,
                         onEditAudioClick = {
+                            if (isWorking) return@ForgePage
                             waveformFile?.let { file ->
                                 editAudioLauncher.launch(
                                     Intent(
                                         context,
                                         AudioEditorActivity::class.java
                                     ).putExtra("audioPath", file.absolutePath)
+                                        .putExtra("startMs", startMs)
+                                        .putExtra("endMs", endMs)
                                 )
                             }
                         },
                         onForgeClick = {
+                            if (isWorking) return@ForgePage
                             if (waveformFile == null) {
                                 statusText = "Download and rip audio first"
                                 return@ForgePage
                             }
 
-                            showSaveChoice = true
+                            if (Build.VERSION.SDK_INT < 29 && androidx.core.content.ContextCompat.checkSelfPermission(context, android.Manifest.permission.WRITE_EXTERNAL_STORAGE) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                                storageLauncher.launch(android.Manifest.permission.WRITE_EXTERNAL_STORAGE)
+                            } else showSaveChoice = true
                         }
                     )
                 }
@@ -302,6 +323,8 @@ fun ToneForgeHome() {
 
         if (showSaveChoice) {
             SaveChoiceDialog(
+                applyNow = applyNow,
+                onApplyNowChange = { applyNow = it },
                 onDismiss = { showSaveChoice = false },
                 onSaveAsRingtone = {
                     showSaveChoice = false
@@ -314,7 +337,8 @@ fun ToneForgeHome() {
                         saveType = SaveAudioType.RINGTONE,
                         onStatus = { statusText = it },
                         onWorking = { isWorking = it },
-                        onForged = { forgedFile = it }
+                        onForged = { forgedFile = it },
+                        applyNow = applyNow
                     )
                 },
                 onSaveAsNotification = {
@@ -328,7 +352,8 @@ fun ToneForgeHome() {
                         saveType = SaveAudioType.NOTIFICATION,
                         onStatus = { statusText = it },
                         onWorking = { isWorking = it },
-                        onForged = { forgedFile = it }
+                        onForged = { forgedFile = it },
+                        applyNow = applyNow
                     )
                 },
                 onSaveAsAlarm = {
@@ -342,7 +367,8 @@ fun ToneForgeHome() {
                         saveType = SaveAudioType.ALARM,
                         onStatus = { statusText = it },
                         onWorking = { isWorking = it },
-                        onForged = { forgedFile = it }
+                        onForged = { forgedFile = it },
+                        applyNow = applyNow
                     )
                 }
             )
@@ -358,6 +384,8 @@ fun ToneForgeHome() {
 
 @Composable
 fun SaveChoiceDialog(
+    applyNow: Boolean,
+    onApplyNowChange: (Boolean) -> Unit,
     onDismiss: () -> Unit,
     onSaveAsRingtone: () -> Unit,
     onSaveAsNotification: () -> Unit,
@@ -367,7 +395,7 @@ fun SaveChoiceDialog(
         onDismissRequest = onDismiss,
         title = {
             Text(
-                text = "Save forged audio as",
+                text = "Save or set sound",
                 modifier = Modifier.fillMaxWidth(),
                 textAlign = TextAlign.Center,
                 fontWeight = FontWeight.Bold
@@ -377,6 +405,11 @@ fun SaveChoiceDialog(
             Column(
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(checked = applyNow, onCheckedChange = onApplyNowChange)
+                    Text("Set as default now")
+                }
+                Text("Default alarm affects alarms using the default sound. Existing custom alarms and app notification channels keep their own sounds.", fontSize = 12.sp)
                 Button(
                     onClick = onSaveAsRingtone,
                     modifier = Modifier.fillMaxWidth()
@@ -417,7 +450,8 @@ fun forgeAndSaveAudio(
     saveType: SaveAudioType,
     onStatus: (String) -> Unit,
     onWorking: (Boolean) -> Unit,
-    onForged: (File) -> Unit
+    onForged: (File) -> Unit,
+    applyNow: Boolean = false
 ) {
     if (audioFile == null) {
         onStatus("Download and rip audio first")
@@ -445,12 +479,12 @@ fun forgeAndSaveAudio(
 
             val finalName = audioFile.nameWithoutExtension + "_$typeText.m4a"
 
-            saveAudioToDownloads(
+            val savedUri = withContext(Dispatchers.IO) { saveAudioToDownloads(
                 context = context,
                 sourceFile = forged,
                 displayName = finalName,
                 type = saveType
-            )
+            ) }
 
             onForged(forged)
 
@@ -471,6 +505,14 @@ fun forgeAndSaveAudio(
                 "Forged.\nSaved to $folderText/DFUSE Tone Forge\nFile: $finalName$samsungNote"
             )
 
+            if (applyNow) {
+                try {
+                    val message = requestDefaultSound(context, savedUri, saveType)
+                    onStatus("Saved to $folderText/DFUSE Tone Forge.\n$message")
+                } catch (e: Exception) {
+                    onStatus("Audio saved. Could not set default: ${e.message}")
+                }
+            }
             Toast.makeText(
                 context,
                 "Saved to $folderText/DFUSE Tone Forge",

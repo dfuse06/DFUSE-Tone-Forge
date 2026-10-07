@@ -6,6 +6,7 @@ import android.net.Uri
 import android.provider.MediaStore
 import java.io.File
 import android.os.Environment
+import android.os.Build
 
 enum class SaveAudioType {
     RINGTONE,
@@ -37,6 +38,30 @@ fun saveAudioToDownloads(
 
         SaveAudioType.ALARM ->
             "${Environment.DIRECTORY_ALARMS}/DFUSE Tone Forge/"
+    }
+
+    if (Build.VERSION.SDK_INT < 29) {
+        val directory = File(Environment.getExternalStorageDirectory(), folder)
+        check(directory.isDirectory || directory.mkdirs()) { "Could not create sound folder" }
+        val target = File(directory, "${System.currentTimeMillis()}_$cleanName")
+        try {
+            sourceFile.copyTo(target, overwrite = false)
+            val legacy = ContentValues().apply {
+                put(MediaStore.Audio.Media.DATA, target.absolutePath)
+                put(MediaStore.Audio.Media.DISPLAY_NAME, target.name)
+                put(MediaStore.Audio.Media.TITLE, cleanName.removeSuffix(".m4a"))
+                put(MediaStore.Audio.Media.MIME_TYPE, "audio/mp4")
+                put(MediaStore.Audio.Media.IS_MUSIC, false)
+                put(MediaStore.Audio.Media.IS_RINGTONE, type == SaveAudioType.RINGTONE)
+                put(MediaStore.Audio.Media.IS_NOTIFICATION, type == SaveAudioType.NOTIFICATION)
+                put(MediaStore.Audio.Media.IS_ALARM, type == SaveAudioType.ALARM)
+            }
+            return resolver.insert(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, legacy)
+                ?: error("Could not register sound")
+        } catch (e: Exception) {
+            target.delete()
+            throw e
+        }
     }
 
     val values = ContentValues().apply {

@@ -15,6 +15,16 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.horizontalScroll
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.CancellationException
+import java.nio.ByteOrder
+import android.media.AudioFormat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Pause
@@ -25,6 +35,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.input.pointer.pointerInput
@@ -38,13 +49,11 @@ import androidx.core.view.WindowInsetsControllerCompat
 import com.example.dfusetoneforge.ui.theme.DfuseToneforgeTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
 import kotlin.math.abs
 import kotlin.math.max
 import android.media.MediaCodec
-import kotlin.math.sqrt
 import androidx.compose.ui.graphics.nativeCanvas
 
 
@@ -70,6 +79,8 @@ class AudioEditorActivity : ComponentActivity() {
             DfuseToneforgeTheme {
                 AudioEditorScreen(
                     audioPath = audioPath,
+                    initialStartMs = intent.getLongExtra("startMs", 0L),
+                    initialEndMs = intent.getLongExtra("endMs", -1L),
                     onBackClick = { finish() },
                     onDoneClick = { startMs, endMs ->
                         val result = Intent().apply {
@@ -90,181 +101,152 @@ class AudioEditorActivity : ComponentActivity() {
 fun AudioEditorScreen(
     audioPath: String?,
     onBackClick: () -> Unit,
-    onDoneClick: (Long, Long) -> Unit
+    onDoneClick: (Long, Long) -> Unit,
+    initialStartMs: Long = 0L,
+    initialEndMs: Long = -1L
 ) {
-    val scope = rememberCoroutineScope()
-
     var mediaPlayer by remember { mutableStateOf<MediaPlayer?>(null) }
     var isPlaying by remember { mutableStateOf(false) }
     var isLoopPlaying by remember { mutableStateOf(false) }
-
-    DisposableEffect(Unit) {
-        onDispose {
-            mediaPlayer?.release()
-            mediaPlayer = null
-        }
-    }
-
-    val fileName = audioPath?.let { File(it).name } ?: "No audio loaded"
-    val audioInfo = remember(audioPath) { readEditorAudioInfo(audioPath) }
-
+    var positionMs by remember { mutableLongStateOf(0L) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var audioInfo by remember(audioPath) { mutableStateOf(EditorAudioInfo("0:00", 0L, "--", "--")) }
     var startMs by remember(audioPath) { mutableLongStateOf(0L) }
-    var endMs by remember(audioPath, audioInfo.durationMs) {
-        mutableLongStateOf(audioInfo.durationMs.coerceAtLeast(1L))
-    }
+    var endMs by remember(audioPath) { mutableLongStateOf(0L) }
+    val latestStart by rememberUpdatedState(startMs)
+    val latestEnd by rememberUpdatedState(endMs)
+    val ready = audioInfo.durationMs > 0L
+    val lifecycleOwner = LocalLifecycleOwner.current
 
-    LaunchedEffect(audioInfo.durationMs) {
-        startMs = 0L
-        endMs = audioInfo.durationMs.coerceAtLeast(1L)
-    }
-
-    fun stopCurrentPlayer() {
+    fun stopPlayer() {
         mediaPlayer?.release()
         mediaPlayer = null
         isPlaying = false
         isLoopPlaying = false
     }
 
-    Surface(
-        modifier = Modifier.fillMaxSize(),
-        color = Color(0xFF090511)
-    ) {
+    LaunchedEffect(audioPath) {
+        audioInfo = withContext(Dispatchers.IO) { readEditorAudioInfo(audioPath) }
+        endMs = if (initialEndMs > 0) initialEndMs.coerceAtMost(audioInfo.durationMs) else audioInfo.durationMs
+        startMs = initialStartMs.coerceIn(0L, (endMs - 1).coerceAtLeast(0L))
+        if (audioInfo.durationMs <= 0) error = "Unable to open this audio. Go back and choose another track."
+    }
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP) {
+                stopPlayer()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            stopPlayer()
+        }
+    }
+    LaunchedEffect(isPlaying, mediaPlayer) {
+        while (isPlaying) {
+            mediaPlayer?.let { player ->
+                positionMs = player.currentPosition.toLong()
+                if (isLoopPlaying && positionMs >= latestEnd) {
+                    player.pause()
+                    player.seekTo(latestStart.toInt())
+                    positionMs = latestStart
+                    isPlaying = false
+                    isLoopPlaying = false
+                }
+            }
+            delay(25)
+        }
+    }
+    fun play(selection: Boolean) {
+        if (!ready || audioPath == null) return
+        if (isPlaying && selection == isLoopPlaying) {
+            mediaPlayer?.pause()
+            isPlaying = false
+            return
+        }
+        stopPlayer()
+        error = null
+        try {
+            val player = MediaPlayer()
+            mediaPlayer = player
+            player.setDataSource(audioPath)
+            player.setOnPreparedListener {
+                positionMs = if (selection) startMs else positionMs.coerceIn(0L, audioInfo.durationMs - 1)
+                it.seekTo(positionMs.toInt())
+                isLoopPlaying = selection
+                it.start()
+                isPlaying = true
+            }
+            player.setOnCompletionListener {
+                isPlaying = false
+                isLoopPlaying = false
+                positionMs = audioInfo.durationMs
+            }
+            player.setOnErrorListener { _, _, _ ->
+                error = "Playback failed. Try reopening the track."
+                stopPlayer()
+                true
+            }
+            player.prepareAsync()
+        } catch (e: Exception) {
+            stopPlayer()
+            error = "Playback failed: ${e.message ?: "unsupported audio"}"
+        }
+    }
+
+    Surface(modifier = Modifier.fillMaxSize(), color = Color(0xFF090511)) {
         Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+            modifier = Modifier.fillMaxSize().safeDrawingPadding().padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            TopEditorBar(
-                onBackClick = {
-                    stopCurrentPlayer()
-                    onBackClick()
-                },
-                isPlaying = isPlaying,
-                isLoopPlaying = isLoopPlaying,
-                onPlayClick = {
-                    if (audioPath == null) return@TopEditorBar
-
-                    mediaPlayer?.let { player ->
-                        if (player.isPlaying && !isLoopPlaying) {
-                            player.pause()
-                            isPlaying = false
-                            return@TopEditorBar
-                        }
-                    }
-
-                    try {
-                        stopCurrentPlayer()
-
-                        mediaPlayer = MediaPlayer().apply {
-                            setDataSource(audioPath)
-                            prepare()
-                            start()
-
-                            setOnCompletionListener {
-                                isPlaying = false
-                                isLoopPlaying = false
-                            }
-                        }
-
-                        isPlaying = true
-                        isLoopPlaying = false
-                    } catch (e: Exception) {
-                        e.printStackTrace()
-                        stopCurrentPlayer()
-                    }
-                }
-            )
-
-            TrackInfoRow(
-                fileName = fileName,
-                durationText = audioInfo.durationText,
-                formatText = audioInfo.format,
-                bitrateText = audioInfo.bitrate
-            )
-
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                TextButton(onClick = { stopPlayer(); onBackClick() }) { Text("‹ Back") }
+                Text(audioPath?.let { cleanEditorDisplayName(File(it).name) } ?: "Audio editor",
+                    color = Color.White, fontSize = 14.sp, maxLines = 1,
+                    overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+                Text("${audioInfo.format} · ${audioInfo.bitrate}", color = Color(0xFFB8AEC7), fontSize = 10.sp)
+                TextButton(onClick = { play(false) }, enabled = ready) { Text(if (isPlaying && !isLoopPlaying) "Pause" else "Play all") }
+            }
+            error?.let { Text(it, color = Color(0xFFFFB4AB), fontSize = 12.sp) }
             WaveformCard(
-                audioPath = audioPath,
-                startMs = startMs,
-                endMs = endMs,
-                durationMs = audioInfo.durationMs.coerceAtLeast(1L),
-                onTrimChanged = { newStart, newEnd ->
-                    startMs = newStart
-                    endMs = newEnd
+                audioPath, startMs, endMs, audioInfo.durationMs.coerceAtLeast(1L),
+                onTrimChanged = { start, end ->
+                    if (isLoopPlaying) stopPlayer()
+                    startMs = start; endMs = end
                 },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f)
-            )
-
-            BottomControls(
-                startText = formatEditorDuration(startMs),
-                endText = formatEditorDuration(endMs),
-                isLoopPlaying = isLoopPlaying,
-
-                onLoopPlayClick = {
-                    if (audioPath == null) return@BottomControls
-
-                    mediaPlayer?.let { player ->
-                        if (player.isPlaying && isLoopPlaying) {
-                            player.pause()
-                            isPlaying = false
-                            isLoopPlaying = false
-                            return@BottomControls
-                        }
-                    }
-
-                    try {
-                        stopCurrentPlayer()
-
-                        val loopStart = startMs
-                        val loopEnd = endMs
-
-                        mediaPlayer = MediaPlayer().apply {
-                            setDataSource(audioPath)
-                            prepare()
-                            seekTo(loopStart.toInt())
-                            start()
-                        }
-
-                        isPlaying = true
-                        isLoopPlaying = true
-
-                        val player = mediaPlayer
-
-                        scope.launch {
-                            while (player != null && player.isPlaying && isLoopPlaying) {
-
-                                if (player.currentPosition >= loopEnd) {
-                                    player.pause()
-                                    player.seekTo(loopStart.toInt())
-
-                                    isPlaying = false
-                                    isLoopPlaying = false
-                                    break
-                                }
-
-                                delay(40)
-                            }
-                        }
-                    } catch (e: Exception) {
-                        e.printStackTrace()
-                        stopCurrentPlayer()
-                    }
-                },
-
-
-                onResetClick = {
-                    stopCurrentPlayer()
-                    startMs = 0L
-                    endMs = audioInfo.durationMs.coerceAtLeast(1L)
-                },
-
-                onDoneClick = {
-                    stopCurrentPlayer()
-                    onDoneClick(startMs, endMs)
+                modifier = Modifier.fillMaxWidth().weight(1f),
+                positionMs = positionMs,
+                onSeek = { value ->
+                    if (isLoopPlaying) stopPlayer()
+                    positionMs = value
+                    mediaPlayer?.seekTo(value.toInt())
                 }
             )
+            Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text("Start", color = Color(0xFFC8A7FF))
+                TextButton(onClick = { startMs = (startMs - 100).coerceAtLeast(0) }, enabled = ready) { Text("−0.1s") }
+                Text(formatEditorDuration(startMs), color = Color.White)
+                TextButton(onClick = { startMs = (startMs + 100).coerceAtMost((endMs - 1).coerceAtLeast(0)) }, enabled = ready) { Text("+0.1s") }
+                Text("End", color = Color(0xFFC8A7FF))
+                TextButton(onClick = { endMs = (endMs - 100).coerceAtLeast(startMs + 1) }, enabled = ready) { Text("−0.1s") }
+                Text(formatEditorDuration(endMs), color = Color.White)
+                TextButton(onClick = { endMs = (endMs + 100).coerceAtMost(audioInfo.durationMs) }, enabled = ready) { Text("+0.1s") }
+                Text("Selected ${formatEditorDuration(endMs - startMs)}", color = Color(0xFFC8A7FF))
+            }
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween) {
+                OutlinedButton(onClick = { stopPlayer(); startMs = 0; endMs = audioInfo.durationMs; positionMs = 0 }, enabled = ready) { Text("Reset") }
+                Text("${formatEditorDuration(positionMs)} / ${audioInfo.durationText}", color = Color.White, fontSize = 12.sp)
+                OutlinedButton(onClick = { play(true) }, enabled = ready) {
+                    Icon(if (isPlaying && isLoopPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
+                        contentDescription = "Preview selection")
+                    Text(if (isPlaying && isLoopPlaying) "Pause" else "Preview selection")
+                }
+                Button(onClick = { stopPlayer(); onDoneClick(startMs, endMs) }, enabled = ready && endMs > startMs) { Text("Use selection") }
+            }
         }
     }
 }
@@ -405,149 +387,131 @@ fun StatBox(
 
 @Composable
 fun WaveformCard(
-    audioPath: String?,
-    startMs: Long,
-    endMs: Long,
-    durationMs: Long,
-    onTrimChanged: (Long, Long) -> Unit,
-    modifier: Modifier = Modifier
+    audioPath: String?, startMs: Long, endMs: Long, durationMs: Long,
+    onTrimChanged: (Long, Long) -> Unit, modifier: Modifier = Modifier,
+    positionMs: Long = 0L, onSeek: (Long) -> Unit = {}
 ) {
     var amplitudes by remember(audioPath) { mutableStateOf<List<Float>>(emptyList()) }
-    var draggingHandle by remember { mutableStateOf<TrimHandle?>(null) }
-
-    val safeDuration = durationMs.coerceAtLeast(1L)
-    val currentStartMs by rememberUpdatedState(startMs)
-    val currentEndMs by rememberUpdatedState(endMs)
-    var isWaveformLoading by remember(audioPath) { mutableStateOf(false) }
-
+    var loading by remember(audioPath) { mutableStateOf(true) }
+    var zoom by remember(audioPath) { mutableFloatStateOf(1f) }
+    var viewport by remember(audioPath) { mutableFloatStateOf(0f) }
+    var dragging by remember { mutableStateOf<TrimHandle?>(null) }
+    val currentStart by rememberUpdatedState(startMs)
+    val currentEnd by rememberUpdatedState(endMs)
+    val trimCallback by rememberUpdatedState(onTrimChanged)
+    val seekCallback by rememberUpdatedState(onSeek)
+    val span = durationMs.toDouble() / zoom
+    val viewStart = viewport * (durationMs - span)
     LaunchedEffect(audioPath) {
-        isWaveformLoading = true
-        amplitudes = loadWaveformAmplitudes(audioPath)
-        isWaveformLoading = false
+        loading = true
+        try { amplitudes = loadWaveformAmplitudes(audioPath) }
+        finally { loading = false }
     }
-
-    Card(
-        modifier = modifier,
-        colors = CardDefaults.cardColors(containerColor = Color(0xFF15101D))
-    ) {
-        Canvas(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(10.dp)
-                .pointerInput(safeDuration) {
-                    detectDragGestures(
-                        onDragStart = { offset ->
-                            val width = size.width.toFloat().coerceAtLeast(1f)
-
-                            val startX = (currentStartMs.toFloat() / safeDuration.toFloat()) * width
-                            val endX = (currentEndMs.toFloat() / safeDuration.toFloat()) * width
-
-                            draggingHandle =
-                                if (abs(offset.x - startX) <= abs(offset.x - endX)) {
-                                    TrimHandle.START
-                                } else {
-                                    TrimHandle.END
-                                }
-                        },
-                        onDragEnd = { draggingHandle = null },
-                        onDragCancel = { draggingHandle = null },
-                        onDrag = { change, _ ->
-                            change.consume()
-
-                            val width = size.width.toFloat().coerceAtLeast(1f)
-                            val minGap = 1_500L
-
-                            val touchedMs = ((change.position.x / width) * safeDuration)
-                                .toLong()
-                                .coerceIn(0L, safeDuration)
-
-                            when (draggingHandle) {
-                                TrimHandle.START -> {
-                                    val maxStart = currentEndMs - minGap
-                                    val newStart = touchedMs.coerceIn(0L, maxStart)
-                                    onTrimChanged(newStart, currentEndMs)
-                                }
-
-                                TrimHandle.END -> {
-                                    val minEnd = currentStartMs + minGap
-                                    val newEnd = touchedMs.coerceIn(minEnd, safeDuration)
-                                    onTrimChanged(currentStartMs, newEnd)
-                                }
-
-                                null -> Unit
-                            }
+    Card(modifier, colors = CardDefaults.cardColors(containerColor = Color(0xFF15101D))) {
+        Column(Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 4.dp)) {
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text("WAVEFORM", color = Color(0xFFC8A7FF), fontSize = 11.sp, fontWeight = FontWeight.Bold,
+                    modifier = Modifier.weight(1f))
+                Text("Tap to seek · drag handles", color = Color(0xFFB8AEC7), fontSize = 11.sp)
+                TextButton(onClick = { zoom = (zoom / 2).coerceAtLeast(1f) }, enabled = zoom > 1) { Text("−") }
+                Text("${zoom.toInt()}×", color = Color.White, fontSize = 12.sp)
+                TextButton(onClick = { zoom = (zoom * 2).coerceAtMost(16f) }, enabled = zoom < 16) { Text("+") }
+            }
+            Box(Modifier.fillMaxWidth().weight(1f)) {
+                Canvas(Modifier.fillMaxSize()
+                    .pointerInput(durationMs, zoom, viewport) {
+                        detectTapGestures { offset ->
+                            seekCallback((viewStart + offset.x / size.width.coerceAtLeast(1) * span).toLong().coerceIn(0, durationMs))
                         }
-                    )
-                }
-        ) {
-            val width = size.width
-            val height = size.height
-            val centerY = height / 2f
-
-            val startProgress = (startMs.toFloat() / safeDuration.toFloat()).coerceIn(0f, 1f)
-            val endProgress = (endMs.toFloat() / safeDuration.toFloat()).coerceIn(0f, 1f)
-
-            val startX = startProgress * width
-            val endX = endProgress * width
-
-            drawRect(Color(0xFF120A1B))
-
-            if (isWaveformLoading) {
-                drawContext.canvas.nativeCanvas.drawText(
-                    "Loading waveform...",
-                    width / 2f,
-                    height / 2f,
-                    android.graphics.Paint().apply {
-                        color = android.graphics.Color.WHITE
-                        textAlign = android.graphics.Paint.Align.CENTER
-                        textSize = 34f
-                        isAntiAlias = true
                     }
-                )
-                return@Canvas
-            }
+                    .pointerInput(durationMs, zoom, viewport) {
+                        detectDragGestures(
+                            onDragStart = { offset ->
+                                val sx = ((currentStart - viewStart) / span * size.width).toFloat()
+                                val ex = ((currentEnd - viewStart) / span * size.width).toFloat()
+                                val hit = 28.dp.toPx()
+                                dragging = when {
+                                    abs(offset.x - sx) <= hit && abs(offset.x - sx) <= abs(offset.x - ex) -> TrimHandle.START
+                                    abs(offset.x - ex) <= hit -> TrimHandle.END
+                                    else -> null
+                                }
+                            },
+                            onDragEnd = { dragging = null }, onDragCancel = { dragging = null },
+                            onDrag = { change, _ ->
+                                change.consume()
+                                val time = (viewStart + change.position.x / size.width.coerceAtLeast(1) * span).toLong().coerceIn(0, durationMs)
+                                when (dragging) {
+                                    TrimHandle.START -> trimCallback(time.coerceAtMost((currentEnd - 1).coerceAtLeast(0)), currentEnd)
+                                    TrimHandle.END -> trimCallback(currentStart, time.coerceAtLeast((currentStart + 1).coerceAtMost(durationMs)))
+                                    null -> seekCallback(time)
+                                }
+                            }
+                        )
+                    }) {
+                    val rulerHeight = 22.dp.toPx()
+                    val bottom = size.height
+                    val center = (bottom + rulerHeight) / 2
+                    fun x(time: Long) = ((time - viewStart) / span * size.width).toFloat()
+                    val sx = x(startMs); val ex = x(endMs)
+                    drawRect(Color(0xFF100C18))
+                    val paint = android.graphics.Paint().apply {
+                        color = android.graphics.Color.rgb(184, 174, 199)
+                        textSize = 10.sp.toPx(); isAntiAlias = true
+                    }
+                    for (tick in 0..4) {
+                        val tx = size.width * tick / 4
+                        drawLine(Color(0xFF292133), Offset(tx, rulerHeight), Offset(tx, bottom), 1f)
+                        paint.textAlign = when(tick) { 0 -> android.graphics.Paint.Align.LEFT; 4 -> android.graphics.Paint.Align.RIGHT; else -> android.graphics.Paint.Align.CENTER }
+                        drawContext.canvas.nativeCanvas.drawText(formatEditorDuration((viewStart + span * tick / 4).toLong()), tx, 12.sp.toPx(), paint)
+                    }
+                    drawLine(Color(0xFF43364F), Offset(0f, center), Offset(size.width, center), 1f)
+                    val left = sx.coerceIn(0f, size.width); val right = ex.coerceIn(0f, size.width)
+                    drawRect(Color(0x207C3AED), Offset(left, rulerHeight), Size((right-left).coerceAtLeast(0f), (bottom-rulerHeight).coerceAtLeast(0f)))
+                    if (amplitudes.isNotEmpty()) {
+                        val barCount = size.width.toInt().coerceAtLeast(1)
+                        val envelope = FloatArray(barCount)
+                        for (bar in 0 until barCount) {
+                            val t0 = viewStart + span * bar / barCount
+                            val t1 = viewStart + span * (bar + 1) / barCount
+                            val first = (t0 / durationMs * amplitudes.size).toInt().coerceIn(0, amplitudes.lastIndex)
+                            val last = (t1 / durationMs * amplitudes.size).toInt().coerceIn(first, amplitudes.lastIndex)
+                            var peak = 0f
+                            for (i in first..last) peak = max(peak, amplitudes[i])
+                            val tx = (bar + 0.5f) * size.width / barCount
+                            val half = peak * (bottom-rulerHeight) * 0.43f
+                            envelope[bar] = half
+                        }
+                        val path = Path()
+                        path.moveTo(0f, center)
+                        for (bar in 0 until barCount) path.lineTo(bar.toFloat(), center - envelope[bar])
+                        for (bar in barCount - 1 downTo 0) path.lineTo(bar.toFloat(), center + envelope[bar])
+                        path.close()
+                        drawPath(path, Color(0xFF685780))
+                        drawContext.canvas.save()
+                        drawContext.canvas.clipRect(left, rulerHeight, right, bottom)
+                        drawPath(path, Color(0xFFBF95FF))
+                        drawContext.canvas.restore()
+                    }
 
-
-            if (amplitudes.isNotEmpty()) {
-                val barWidth = width / amplitudes.size
-                amplitudes.forEachIndexed { i, amp ->
-                    val x = i * barWidth + barWidth / 2f
-                    val barHeight = height * amp.coerceIn(0.08f, 1f)
-
-                    val isSelected = x in startX..endX
-                    val color = if (isSelected) Color(0xFFB178FF) else Color(0xFF5F5A6D)
-
-                    drawLine(
-                        color = color,
-                        start = Offset(x, centerY - barHeight / 2f),
-                        end = Offset(x, centerY + barHeight / 2f),
-                        strokeWidth = max(2.2f, barWidth * 0.45f),
-                        cap = StrokeCap.Round
-                    )
+                    for (handleX in listOf(sx, ex)) {
+                        if (handleX in 0f..size.width) {
+                            val hx = handleX.coerceIn(6.dp.toPx(), (size.width - 6.dp.toPx()).coerceAtLeast(6.dp.toPx()))
+                            drawLine(Color(0xFFD5B8FF), Offset(hx, rulerHeight), Offset(hx, bottom), 2.dp.toPx())
+                            drawRoundRect(Color(0xFFD5B8FF), Offset(hx-3.dp.toPx(), center-16.dp.toPx()),
+                                Size(6.dp.toPx(), 32.dp.toPx()), androidx.compose.ui.geometry.CornerRadius(4.dp.toPx()))
+                        }
+                    }
+                    val px = x(positionMs)
+                    if (px in 0f..size.width) {
+                        drawLine(Color(0xFF4FE1CE), Offset(px, rulerHeight), Offset(px, bottom), 2.dp.toPx())
+                        drawCircle(Color(0xFF4FE1CE), 4.dp.toPx(), Offset(px, rulerHeight))
+                    }
                 }
+                if (loading) CircularProgressIndicator(Modifier.align(Alignment.Center).size(28.dp))
+                else if (amplitudes.isEmpty()) Text("Waveform unavailable. You can still preview and adjust the selection.",
+                    color = Color.White, fontSize = 12.sp, modifier = Modifier.align(Alignment.Center).padding(16.dp))
             }
-
-            drawRect(
-                color = Color(0x33B178FF),
-                topLeft = Offset(startX, 0f),
-                size = Size(endX - startX, height)
-            )
-
-            val handleWidth = 18f
-
-            drawRoundRect(
-                color = Color(0xFFC8A7FF),
-                topLeft = Offset(startX - handleWidth / 2f, 0f),
-                size = Size(handleWidth, height),
-                cornerRadius = androidx.compose.ui.geometry.CornerRadius(8f, 8f)
-            )
-
-            drawRoundRect(
-                color = Color(0xFFC8A7FF),
-                topLeft = Offset(endX - handleWidth / 2f, 0f),
-                size = Size(handleWidth, height),
-                cornerRadius = androidx.compose.ui.geometry.CornerRadius(8f, 8f)
-            )
+            if (zoom > 1f) Slider(value = viewport, onValueChange = { viewport = it }, modifier = Modifier.height(30.dp))
         }
     }
 }
@@ -557,199 +521,111 @@ enum class TrimHandle {
     END
 }
 
-@Composable
-fun BottomControls(
-    startText: String,
-    endText: String,
-    isLoopPlaying: Boolean,
-    onLoopPlayClick: () -> Unit,
-    onResetClick: () -> Unit,
-    onDoneClick: () -> Unit
-) {
-    Box(
-        modifier = Modifier.fillMaxWidth(),
-        contentAlignment = Alignment.Center
-    ) {
-        Row(
-            modifier = Modifier.align(Alignment.CenterStart),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            OutlinedButton(
-                onClick = onResetClick,
-                border = BorderStroke(1.dp, Color(0xFF4D4658))
-            ) {
-                Text("Reset")
-            }
-
-            Spacer(modifier = Modifier.width(12.dp))
-
-            Text(
-                text = "$startText  →  $endText",
-                color = Color(0xFFB8AEC7),
-                fontSize = 12.sp
-            )
-        }
-
-        OutlinedButton(
-            onClick = onLoopPlayClick,
-            modifier = Modifier
-                .align(Alignment.Center)
-                .size(72.dp),
-            contentPadding = PaddingValues(0.dp),
-            border = BorderStroke(1.dp, Color(0xFF7C3AED))
-        ) {
-            Icon(
-                imageVector = if (isLoopPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                contentDescription = null,
-                modifier = Modifier.size(34.dp),
-                tint = Color(0xFFC8A7FF)
-            )
-        }
-
-        Button(
-            onClick = onDoneClick,
-            modifier = Modifier.align(Alignment.CenterEnd)
-        ) {
-            Text("✓ Done")
-        }
-    }
-}
-
-
 data class EditorAudioInfo(
     val durationText: String,
     val durationMs: Long,
     val format: String,
     val bitrate: String
 )
-suspend fun loadWaveformAmplitudes(
-    audioPath: String?,
-    bars: Int = 900
-): List<Float> = withContext(Dispatchers.IO) {
+suspend fun loadWaveformAmplitudes(audioPath: String?, bars: Int = 16_384): List<Float> = withContext(Dispatchers.IO) {
     if (audioPath == null) return@withContext emptyList()
-
+    require(bars > 0)
     val extractor = MediaExtractor()
-
+    var decoder: MediaCodec? = null
     try {
         extractor.setDataSource(audioPath)
-
-        var trackIndex = -1
-        var format: MediaFormat? = null
-
-        for (i in 0 until extractor.trackCount) {
-            val f = extractor.getTrackFormat(i)
-            val mime = f.getString(MediaFormat.KEY_MIME) ?: ""
-
-            if (mime.startsWith("audio/")) {
-                trackIndex = i
-                format = f
-                break
-            }
-        }
-
-        if (trackIndex == -1 || format == null) return@withContext emptyList()
-
-        extractor.selectTrack(trackIndex)
-
-        val mime = format.getString(MediaFormat.KEY_MIME) ?: return@withContext emptyList()
-        val codec = MediaCodec.createDecoderByType(mime)
+        val track = (0 until extractor.trackCount).firstOrNull {
+            extractor.getTrackFormat(it).getString(MediaFormat.KEY_MIME)?.startsWith("audio/") == true
+        } ?: return@withContext emptyList()
+        val format = extractor.getTrackFormat(track)
+        extractor.selectTrack(track)
+        val durationUs = if (format.containsKey(MediaFormat.KEY_DURATION)) format.getLong(MediaFormat.KEY_DURATION)
+            else readEditorAudioInfo(audioPath).durationMs * 1000
+        if (durationUs <= 0) return@withContext emptyList()
+        val codec = MediaCodec.createDecoderByType(format.getString(MediaFormat.KEY_MIME)!!)
+        decoder = codec
         codec.configure(format, null, null, 0)
         codec.start()
-
-        val amplitudes = MutableList(bars) { 0f }
-        val counts = MutableList(bars) { 0 }
-
-        val durationUs =
-            if (format.containsKey(MediaFormat.KEY_DURATION))
-                format.getLong(MediaFormat.KEY_DURATION)
-            else 1L
-
+        var rate = format.getInteger(MediaFormat.KEY_SAMPLE_RATE)
+        var channels = format.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
+        var floatPcm = false
+        val peaks = FloatArray(bars)
+        val energy = DoubleArray(bars)
+        val counts = IntArray(bars)
+        val info = MediaCodec.BufferInfo()
         var inputDone = false
         var outputDone = false
-        val bufferInfo = MediaCodec.BufferInfo()
-
+        var lastOutput = System.nanoTime()
         while (!outputDone) {
+            ensureActive()
+            check(System.nanoTime() - lastOutput < 15_000_000_000L) { "Audio decoder timed out" }
             if (!inputDone) {
-                val inputIndex = codec.dequeueInputBuffer(10_000)
-
-                if (inputIndex >= 0) {
-                    val inputBuffer = codec.getInputBuffer(inputIndex)
-                    inputBuffer?.clear()
-
-                    val sampleSize = extractor.readSampleData(inputBuffer!!, 0)
-
-                    if (sampleSize < 0) {
-                        codec.queueInputBuffer(
-                            inputIndex,
-                            0,
-                            0,
-                            0L,
-                            MediaCodec.BUFFER_FLAG_END_OF_STREAM
-                        )
+                val index = codec.dequeueInputBuffer(10_000)
+                if (index >= 0) {
+                    val buffer = requireNotNull(codec.getInputBuffer(index))
+                    buffer.clear()
+                    val count = extractor.readSampleData(buffer, 0)
+                    if (count < 0) {
+                        codec.queueInputBuffer(index, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
                         inputDone = true
                     } else {
-                        codec.queueInputBuffer(
-                            inputIndex,
-                            0,
-                            sampleSize,
-                            extractor.sampleTime,
-                            0
-                        )
+                        codec.queueInputBuffer(index, 0, count, extractor.sampleTime, 0)
                         extractor.advance()
                     }
                 }
             }
-
-            val outputIndex = codec.dequeueOutputBuffer(bufferInfo, 10_000)
-
-            if (outputIndex >= 0) {
-                val outputBuffer = codec.getOutputBuffer(outputIndex)
-
-                if (outputBuffer != null && bufferInfo.size > 0) {
-                    outputBuffer.position(bufferInfo.offset)
-                    outputBuffer.limit(bufferInfo.offset + bufferInfo.size)
-
-                    var sum = 0.0
-                    var sampleCount = 0
-
-                    while (outputBuffer.remaining() >= 2) {
-                        val sample = outputBuffer.short.toInt()
-                        sum += sample * sample
-                        sampleCount++
+            val index = codec.dequeueOutputBuffer(info, 10_000)
+            if (index == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                val output = codec.outputFormat
+                rate = output.getInteger(MediaFormat.KEY_SAMPLE_RATE)
+                channels = output.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
+                val encoding = if (output.containsKey(MediaFormat.KEY_PCM_ENCODING)) output.getInteger(MediaFormat.KEY_PCM_ENCODING) else AudioFormat.ENCODING_PCM_16BIT
+                check(encoding == AudioFormat.ENCODING_PCM_16BIT || encoding == AudioFormat.ENCODING_PCM_FLOAT) { "Unsupported PCM encoding" }
+                floatPcm = encoding == AudioFormat.ENCODING_PCM_FLOAT
+                lastOutput = System.nanoTime()
+            } else if (index >= 0) {
+                lastOutput = System.nanoTime()
+                try {
+                    val buffer = codec.getOutputBuffer(index)
+                    if (buffer != null && info.size > 0 && info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG == 0) {
+                        buffer.position(info.offset)
+                        buffer.limit(info.offset + info.size)
+                        buffer.order(ByteOrder.nativeOrder())
+                        val frameBytes = channels * if (floatPcm) 4 else 2
+                        var frame = 0L
+                        while (buffer.remaining() >= frameBytes) {
+                            var peak = 0f
+                            repeat(channels) {
+                                val sample = if (floatPcm) buffer.float else buffer.short / 32768f
+                                if (sample.isFinite()) peak = max(peak, abs(sample))
+                            }
+                            val timeUs = info.presentationTimeUs + frame * 1_000_000L / rate
+                            if (timeUs in 0 until durationUs) {
+                                val bucket = (timeUs.toDouble() / durationUs * bars).toInt().coerceIn(0, bars - 1)
+                                peaks[bucket] = max(peaks[bucket], peak)
+                                energy[bucket] += peak.toDouble() * peak
+                                counts[bucket]++
+                            }
+                            frame++
+                        }
                     }
-
-                    if (sampleCount > 0) {
-                        val rms = sqrt(sum / sampleCount).toFloat() / Short.MAX_VALUE
-
-                        val bucket = ((bufferInfo.presentationTimeUs.toFloat() / durationUs.toFloat()) * bars)
-                            .toInt()
-                            .coerceIn(0, bars - 1)
-
-                        amplitudes[bucket] = max(amplitudes[bucket], rms)
-                        counts[bucket] += 1
-                    }
-                }
-
-                codec.releaseOutputBuffer(outputIndex, false)
-
-                if (bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
-                    outputDone = true
-                }
+                } finally { codec.releaseOutputBuffer(index, false) }
+                outputDone = info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0
             }
         }
-
-        codec.stop()
-        codec.release()
-
-        val maxValue = amplitudes.maxOrNull()?.coerceAtLeast(0.001f) ?: 0.001f
-
-        amplitudes.map { amp ->
-            (amp / maxValue).coerceIn(0.02f, 1f)
+        val levels = FloatArray(bars) { i ->
+            if (counts[i] == 0) 0f else (kotlin.math.sqrt(energy[i] / counts[i]) * 0.85 + peaks[i] * 0.15).toFloat()
         }
+        val scale = (levels.maxOrNull() ?: 0f).coerceAtLeast(0.001f)
+        levels.map { (it / scale).coerceIn(0f, 1f) }
+    } catch (e: CancellationException) {
+        throw e
     } catch (e: Exception) {
-        e.printStackTrace()
+        android.util.Log.w("ToneForge", "Waveform decode failed", e)
         emptyList()
     } finally {
+        try { decoder?.stop() } catch (_: Exception) { }
+        decoder?.release()
         extractor.release()
     }
 }
@@ -777,7 +653,7 @@ fun readEditorAudioInfo(audioPath: String?): EditorAudioInfo {
         val bitrate =
             retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_BITRATE)
                 ?.toLongOrNull()
-                ?.let { "${it / 1000}" }
+                ?.let { "${it / 1000} kbps" }
                 ?: "--"
 
         EditorAudioInfo(
@@ -816,5 +692,5 @@ private fun formatEditorDuration(ms: Long): String {
     val minutes = totalSeconds / 60
     val seconds = totalSeconds % 60
 
-    return "$minutes:${seconds.toString().padStart(2, '0')}"
+    return "$minutes:${seconds.toString().padStart(2, '0')}.${((ms % 1000) / 10).toString().padStart(2, '0')}"
 }

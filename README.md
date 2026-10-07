@@ -10,10 +10,16 @@ Download → Extract Audio → Edit Waveform → Trim → Forge Ringtone
 
 * Download media from supported URLs
 * Automatic audio extraction
-* Interactive waveform editor
+* Continuous waveform editor with a compact landscape layout
+* Zoom up to 16× with timeline scrolling
+* Tap to seek, playback cursor, and selection preview
+* Precise trimming with 0.1-second adjustments
 * Dual trim handles
 * Ringtone creation
-* Save directly to Ringtones/DFUSE Tone Forge
+* Save to public Ringtones, Notifications, or Alarms folders
+* Apply the chosen default sound from the app
+* Modify-system-settings permission flow with return-to-app handling
+* Samsung-compatible Android APIs (Samsung device testing pending)
 * Material 3 light and dark themes
 * DFUSE purple UI
 
@@ -54,14 +60,12 @@ This project is intended for personal audio editing and ringtone creation.
 
 ## Status
 
-Active development
+Current release preparation: **0.6-beta** (version code 6).
+
+Waveform UI and default notification application were tested by the user on a Motorola phone. Samsung, default ringtone/alarm, and Android 8/9 testing remain pending.
 
 ### Planned Features
 
-* Audio preview playback
-* Set ringtone directly from app
-* Zoomable waveform editor
-* Waveform scrolling
 * Export presets
 * Audio effects
 
