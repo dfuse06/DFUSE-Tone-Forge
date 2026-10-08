@@ -31,6 +31,7 @@ import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
@@ -105,6 +106,8 @@ fun AudioEditorScreen(
     initialStartMs: Long = 0L,
     initialEndMs: Long = -1L
 ) {
+    val editorContext = LocalContext.current
+    val loopPreview = remember { editorContext.getSharedPreferences("dfuse_prefs", android.content.Context.MODE_PRIVATE).getBoolean("loopPreview", false) }
     var mediaPlayer by remember { mutableStateOf<MediaPlayer?>(null) }
     var isPlaying by remember { mutableStateOf(false) }
     var isLoopPlaying by remember { mutableStateOf(false) }
@@ -148,11 +151,13 @@ fun AudioEditorScreen(
             mediaPlayer?.let { player ->
                 positionMs = player.currentPosition.toLong()
                 if (isLoopPlaying && positionMs >= latestEnd) {
-                    player.pause()
                     player.seekTo(latestStart.toInt())
                     positionMs = latestStart
-                    isPlaying = false
-                    isLoopPlaying = false
+                    if (!loopPreview) {
+                        player.pause()
+                        isPlaying = false
+                        isLoopPlaying = false
+                    }
                 }
             }
             delay(25)
@@ -179,9 +184,15 @@ fun AudioEditorScreen(
                 isPlaying = true
             }
             player.setOnCompletionListener {
-                isPlaying = false
-                isLoopPlaying = false
-                positionMs = audioInfo.durationMs
+                if (selection && loopPreview) {
+                    it.seekTo(latestStart.toInt())
+                    positionMs = latestStart
+                    it.start()
+                } else {
+                    isPlaying = false
+                    isLoopPlaying = false
+                    positionMs = audioInfo.durationMs
+                }
             }
             player.setOnErrorListener { _, _, _ ->
                 error = "Playback failed. Try reopening the track."
@@ -195,7 +206,7 @@ fun AudioEditorScreen(
         }
     }
 
-    Surface(modifier = Modifier.fillMaxSize(), color = Color(0xFF090511)) {
+    Surface(modifier = Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
         Column(
             modifier = Modifier.fillMaxSize().safeDrawingPadding().padding(12.dp),
             verticalArrangement = Arrangement.spacedBy(6.dp)
@@ -203,9 +214,9 @@ fun AudioEditorScreen(
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 TextButton(onClick = { stopPlayer(); onBackClick() }) { Text("‹ Back") }
                 Text(audioPath?.let { cleanEditorDisplayName(File(it).name) } ?: "Audio editor",
-                    color = Color.White, fontSize = 14.sp, maxLines = 1,
+                    color = MaterialTheme.colorScheme.onSurface, fontSize = 14.sp, maxLines = 1,
                     overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
-                Text("${audioInfo.format} · ${audioInfo.bitrate}", color = Color(0xFFB8AEC7), fontSize = 10.sp)
+                Text("${audioInfo.format} · ${audioInfo.bitrate}", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 10.sp)
                 TextButton(onClick = { play(false) }, enabled = ready) { Text(if (isPlaying && !isLoopPlaying) "Pause" else "Play all") }
             }
             error?.let { Text(it, color = Color(0xFFFFB4AB), fontSize = 12.sp) }
@@ -226,20 +237,20 @@ fun AudioEditorScreen(
             Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text("Start", color = Color(0xFFC8A7FF))
+                Text("Start", color = MaterialTheme.colorScheme.primary)
                 TextButton(onClick = { startMs = (startMs - 100).coerceAtLeast(0) }, enabled = ready) { Text("−0.1s") }
-                Text(formatEditorDuration(startMs), color = Color.White)
+                Text(formatEditorDuration(startMs), color = MaterialTheme.colorScheme.onSurface)
                 TextButton(onClick = { startMs = (startMs + 100).coerceAtMost((endMs - 1).coerceAtLeast(0)) }, enabled = ready) { Text("+0.1s") }
-                Text("End", color = Color(0xFFC8A7FF))
+                Text("End", color = MaterialTheme.colorScheme.primary)
                 TextButton(onClick = { endMs = (endMs - 100).coerceAtLeast(startMs + 1) }, enabled = ready) { Text("−0.1s") }
-                Text(formatEditorDuration(endMs), color = Color.White)
+                Text(formatEditorDuration(endMs), color = MaterialTheme.colorScheme.onSurface)
                 TextButton(onClick = { endMs = (endMs + 100).coerceAtMost(audioInfo.durationMs) }, enabled = ready) { Text("+0.1s") }
-                Text("Selected ${formatEditorDuration(endMs - startMs)}", color = Color(0xFFC8A7FF))
+                Text("Selected ${formatEditorDuration(endMs - startMs)}", color = MaterialTheme.colorScheme.primary)
             }
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween) {
                 OutlinedButton(onClick = { stopPlayer(); startMs = 0; endMs = audioInfo.durationMs; positionMs = 0 }, enabled = ready) { Text("Reset") }
-                Text("${formatEditorDuration(positionMs)} / ${audioInfo.durationText}", color = Color.White, fontSize = 12.sp)
+                Text("${formatEditorDuration(positionMs)} / ${audioInfo.durationText}", color = MaterialTheme.colorScheme.onSurface, fontSize = 12.sp)
                 OutlinedButton(onClick = { play(true) }, enabled = ready) {
                     Icon(if (isPlaying && isLoopPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
                         contentDescription = "Preview selection")
@@ -263,7 +274,7 @@ fun TopEditorBar(
     ) {
         Text(
             text = "‹ Back",
-            color = Color.White,
+            color = MaterialTheme.colorScheme.onSurface,
             fontSize = 14.sp,
             modifier = Modifier
                 .weight(1f)
@@ -276,14 +287,14 @@ fun TopEditorBar(
         ) {
             Text(
                 text = "Audio Editor",
-                color = Color.White,
+                color = MaterialTheme.colorScheme.onSurface,
                 fontSize = 22.sp,
                 fontWeight = FontWeight.Bold
             )
 
             Text(
                 text = "Drag handles to select start and end",
-                color = Color(0xFFC8A7FF),
+                color = MaterialTheme.colorScheme.primary,
                 fontSize = 11.sp
             )
         }
@@ -295,11 +306,11 @@ fun TopEditorBar(
             OutlinedButton(
                 onClick = onPlayClick,
                 contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp),
-                border = BorderStroke(1.dp, Color(0xFF7C3AED))
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.primary)
             ) {
                 Text(
                     text = if (isPlaying && !isLoopPlaying) "⏸ Pause All" else "▷ Play All",
-                    color = Color(0xFFC8A7FF),
+                    color = MaterialTheme.colorScheme.primary,
                     fontSize = 12.sp
                 )
             }
@@ -317,7 +328,7 @@ fun TrackInfoRow(
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(
-            containerColor = Color(0xFF17121F)
+            containerColor = MaterialTheme.colorScheme.surfaceVariant
         )
     ) {
         Row(
@@ -327,7 +338,7 @@ fun TrackInfoRow(
             Box(
                 modifier = Modifier
                     .size(42.dp)
-                    .background(Color(0xFF5B21B6)),
+                    .background(MaterialTheme.colorScheme.primary),
                 contentAlignment = Alignment.Center
             ) {
                 Text("🔨", fontSize = 20.sp)
@@ -338,7 +349,7 @@ fun TrackInfoRow(
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = "Track info",
-                    color = Color.White,
+                    color = MaterialTheme.colorScheme.onSurface,
                     fontSize = 14.sp,
                     fontWeight = FontWeight.Bold,
                     maxLines = 1,
@@ -347,7 +358,7 @@ fun TrackInfoRow(
 
                 Text(
                     text = cleanEditorDisplayName(fileName),
-                    color = Color(0xFFB8AEC7),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     fontSize = 11.sp,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
@@ -372,13 +383,13 @@ fun StatBox(
     ) {
         Text(
             text = label,
-            color = Color(0xFFB8AEC7),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             fontSize = 9.sp
         )
 
         Text(
             text = value,
-            color = Color.White,
+            color = MaterialTheme.colorScheme.onSurface,
             fontSize = 12.sp,
             fontWeight = FontWeight.Bold
         )
@@ -393,6 +404,9 @@ fun WaveformCard(
 ) {
     var amplitudes by remember(audioPath) { mutableStateOf<List<Float>>(emptyList()) }
     var loading by remember(audioPath) { mutableStateOf(true) }
+    var progress by remember(audioPath) { mutableFloatStateOf(0f) }
+    val waveformCacheDir = LocalContext.current.cacheDir
+    val waveformColors = MaterialTheme.colorScheme
     var zoom by remember(audioPath) { mutableFloatStateOf(1f) }
     var viewport by remember(audioPath) { mutableFloatStateOf(0f) }
     var dragging by remember { mutableStateOf<TrimHandle?>(null) }
@@ -404,17 +418,24 @@ fun WaveformCard(
     val viewStart = viewport * (durationMs - span)
     LaunchedEffect(audioPath) {
         loading = true
-        try { amplitudes = loadWaveformAmplitudes(audioPath) }
+        try {
+            amplitudes = loadCachedWaveform(waveformCacheDir, audioPath) { partial, fraction ->
+                withContext(Dispatchers.Main) {
+                    amplitudes = partial
+                    progress = fraction
+                }
+            }
+        }
         finally { loading = false }
     }
-    Card(modifier, colors = CardDefaults.cardColors(containerColor = Color(0xFF15101D))) {
+    Card(modifier, colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
         Column(Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 4.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text("WAVEFORM", color = Color(0xFFC8A7FF), fontSize = 11.sp, fontWeight = FontWeight.Bold,
+                Text("WAVEFORM", color = MaterialTheme.colorScheme.primary, fontSize = 11.sp, fontWeight = FontWeight.Bold,
                     modifier = Modifier.weight(1f))
-                Text("Tap to seek · drag handles", color = Color(0xFFB8AEC7), fontSize = 11.sp)
+                Text("Tap to seek · drag handles", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp)
                 TextButton(onClick = { zoom = (zoom / 2).coerceAtLeast(1f) }, enabled = zoom > 1) { Text("−") }
-                Text("${zoom.toInt()}×", color = Color.White, fontSize = 12.sp)
+                Text("${zoom.toInt()}×", color = MaterialTheme.colorScheme.onSurface, fontSize = 12.sp)
                 TextButton(onClick = { zoom = (zoom * 2).coerceAtMost(16f) }, enabled = zoom < 16) { Text("+") }
             }
             Box(Modifier.fillMaxWidth().weight(1f)) {
@@ -453,20 +474,20 @@ fun WaveformCard(
                     val center = (bottom + rulerHeight) / 2
                     fun x(time: Long) = ((time - viewStart) / span * size.width).toFloat()
                     val sx = x(startMs); val ex = x(endMs)
-                    drawRect(Color(0xFF100C18))
+                    drawRect(waveformColors.background)
                     val paint = android.graphics.Paint().apply {
                         color = android.graphics.Color.rgb(184, 174, 199)
                         textSize = 10.sp.toPx(); isAntiAlias = true
                     }
                     for (tick in 0..4) {
                         val tx = size.width * tick / 4
-                        drawLine(Color(0xFF292133), Offset(tx, rulerHeight), Offset(tx, bottom), 1f)
+                        drawLine(waveformColors.onSurface.copy(alpha = 0.08f), Offset(tx, rulerHeight), Offset(tx, bottom), 1f)
                         paint.textAlign = when(tick) { 0 -> android.graphics.Paint.Align.LEFT; 4 -> android.graphics.Paint.Align.RIGHT; else -> android.graphics.Paint.Align.CENTER }
                         drawContext.canvas.nativeCanvas.drawText(formatEditorDuration((viewStart + span * tick / 4).toLong()), tx, 12.sp.toPx(), paint)
                     }
-                    drawLine(Color(0xFF43364F), Offset(0f, center), Offset(size.width, center), 1f)
+                    drawLine(waveformColors.onSurface.copy(alpha = 0.2f), Offset(0f, center), Offset(size.width, center), 1f)
                     val left = sx.coerceIn(0f, size.width); val right = ex.coerceIn(0f, size.width)
-                    drawRect(Color(0x207C3AED), Offset(left, rulerHeight), Size((right-left).coerceAtLeast(0f), (bottom-rulerHeight).coerceAtLeast(0f)))
+                    drawRect(waveformColors.primary.copy(alpha = 0.12f), Offset(left, rulerHeight), Size((right-left).coerceAtLeast(0f), (bottom-rulerHeight).coerceAtLeast(0f)))
                     if (amplitudes.isNotEmpty()) {
                         val barCount = size.width.toInt().coerceAtLeast(1)
                         val envelope = FloatArray(barCount)
@@ -486,30 +507,34 @@ fun WaveformCard(
                         for (bar in 0 until barCount) path.lineTo(bar.toFloat(), center - envelope[bar])
                         for (bar in barCount - 1 downTo 0) path.lineTo(bar.toFloat(), center + envelope[bar])
                         path.close()
-                        drawPath(path, Color(0xFF685780))
+                        drawPath(path, waveformColors.primary.copy(alpha = 0.35f))
                         drawContext.canvas.save()
                         drawContext.canvas.clipRect(left, rulerHeight, right, bottom)
-                        drawPath(path, Color(0xFFBF95FF))
+                        drawPath(path, waveformColors.primary)
                         drawContext.canvas.restore()
                     }
 
                     for (handleX in listOf(sx, ex)) {
                         if (handleX in 0f..size.width) {
                             val hx = handleX.coerceIn(6.dp.toPx(), (size.width - 6.dp.toPx()).coerceAtLeast(6.dp.toPx()))
-                            drawLine(Color(0xFFD5B8FF), Offset(hx, rulerHeight), Offset(hx, bottom), 2.dp.toPx())
-                            drawRoundRect(Color(0xFFD5B8FF), Offset(hx-3.dp.toPx(), center-16.dp.toPx()),
+                            drawLine(waveformColors.primary, Offset(hx, rulerHeight), Offset(hx, bottom), 2.dp.toPx())
+                            drawRoundRect(waveformColors.primary, Offset(hx-3.dp.toPx(), center-16.dp.toPx()),
                                 Size(6.dp.toPx(), 32.dp.toPx()), androidx.compose.ui.geometry.CornerRadius(4.dp.toPx()))
                         }
                     }
                     val px = x(positionMs)
                     if (px in 0f..size.width) {
-                        drawLine(Color(0xFF4FE1CE), Offset(px, rulerHeight), Offset(px, bottom), 2.dp.toPx())
-                        drawCircle(Color(0xFF4FE1CE), 4.dp.toPx(), Offset(px, rulerHeight))
+                        drawLine(waveformColors.onSurface, Offset(px, rulerHeight), Offset(px, bottom), 2.dp.toPx())
+                        drawCircle(waveformColors.onSurface, 4.dp.toPx(), Offset(px, rulerHeight))
                     }
                 }
-                if (loading) CircularProgressIndicator(Modifier.align(Alignment.Center).size(28.dp))
+                if (loading) Text(
+                    if (progress > 0f) "Building waveform ${(progress * 100).toInt()}%" else "Opening waveform…",
+                    color = MaterialTheme.colorScheme.primary, fontSize = 11.sp,
+                    modifier = Modifier.align(Alignment.TopEnd).background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.87f)).padding(6.dp)
+                )
                 else if (amplitudes.isEmpty()) Text("Waveform unavailable. You can still preview and adjust the selection.",
-                    color = Color.White, fontSize = 12.sp, modifier = Modifier.align(Alignment.Center).padding(16.dp))
+                    color = MaterialTheme.colorScheme.onSurface, fontSize = 12.sp, modifier = Modifier.align(Alignment.Center).padding(16.dp))
             }
             if (zoom > 1f) Slider(value = viewport, onValueChange = { viewport = it }, modifier = Modifier.height(30.dp))
         }
@@ -527,7 +552,10 @@ data class EditorAudioInfo(
     val format: String,
     val bitrate: String
 )
-suspend fun loadWaveformAmplitudes(audioPath: String?, bars: Int = 16_384): List<Float> = withContext(Dispatchers.IO) {
+suspend fun loadWaveformAmplitudes(
+    audioPath: String?, bars: Int = 16_384,
+    onProgress: suspend (List<Float>, Float) -> Unit = { _, _ -> }
+): List<Float> = withContext(Dispatchers.IO) {
     if (audioPath == null) return@withContext emptyList()
     require(bars > 0)
     val extractor = MediaExtractor()
@@ -556,11 +584,19 @@ suspend fun loadWaveformAmplitudes(audioPath: String?, bars: Int = 16_384): List
         var inputDone = false
         var outputDone = false
         var lastOutput = System.nanoTime()
+        var lastPreview = lastOutput
+        fun snapshot(): List<Float> {
+            val levels = FloatArray(bars) { i ->
+                if (counts[i] == 0) 0f else (kotlin.math.sqrt(energy[i] / counts[i]) * 0.85 + peaks[i] * 0.15).toFloat()
+            }
+            val scale = (levels.maxOrNull() ?: 0f).coerceAtLeast(0.001f)
+            return levels.map { (it / scale).coerceIn(0f, 1f) }
+        }
         while (!outputDone) {
             ensureActive()
             check(System.nanoTime() - lastOutput < 15_000_000_000L) { "Audio decoder timed out" }
             if (!inputDone) {
-                val index = codec.dequeueInputBuffer(10_000)
+                val index = codec.dequeueInputBuffer(0)
                 if (index >= 0) {
                     val buffer = requireNotNull(codec.getInputBuffer(index))
                     buffer.clear()
@@ -574,7 +610,7 @@ suspend fun loadWaveformAmplitudes(audioPath: String?, bars: Int = 16_384): List
                     }
                 }
             }
-            val index = codec.dequeueOutputBuffer(info, 10_000)
+            val index = codec.dequeueOutputBuffer(info, 1_000)
             if (index == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
                 val output = codec.outputFormat
                 rate = output.getInteger(MediaFormat.KEY_SAMPLE_RATE)
@@ -592,32 +628,44 @@ suspend fun loadWaveformAmplitudes(audioPath: String?, bars: Int = 16_384): List
                         buffer.limit(info.offset + info.size)
                         buffer.order(ByteOrder.nativeOrder())
                         val frameBytes = channels * if (floatPcm) 4 else 2
-                        var frame = 0L
-                        while (buffer.remaining() >= frameBytes) {
+                        val frames = buffer.remaining() / frameBytes
+                        val baseOffset = buffer.position()
+                        // The waveform is an amplitude envelope, not an audio reconstruction.
+                        // Limit analysis to ~8k frames/sec, retaining finer sampling for short clips.
+                        val framesPerBucket = (durationUs.toDouble() * rate / 1_000_000 / bars).coerceAtLeast(1.0)
+                        val stride = minOf((rate / 8_000).coerceAtLeast(1), framesPerBucket.toInt().coerceAtLeast(1))
+                        val bytesPerSample = if (floatPcm) 4 else 2
+                        val bucketPerFrame = bars.toDouble() * 1_000_000 / (durationUs.toDouble() * rate)
+                        val firstBucket = info.presentationTimeUs.toDouble() * bars / durationUs
+                        var frame = 0
+                        while (frame < frames) {
                             var peak = 0f
-                            repeat(channels) {
-                                val sample = if (floatPcm) buffer.float else buffer.short / 32768f
+                            val offset = baseOffset + frame * frameBytes
+                            var channel = 0
+                            while (channel < channels) {
+                                val at = offset + channel * bytesPerSample
+                                val sample = if (floatPcm) buffer.getFloat(at) else buffer.getShort(at) / 32768f
                                 if (sample.isFinite()) peak = max(peak, abs(sample))
+                                channel++
                             }
-                            val timeUs = info.presentationTimeUs + frame * 1_000_000L / rate
-                            if (timeUs in 0 until durationUs) {
-                                val bucket = (timeUs.toDouble() / durationUs * bars).toInt().coerceIn(0, bars - 1)
+                            val bucket = (firstBucket + frame * bucketPerFrame).toInt()
+                            if (bucket in 0 until bars) {
                                 peaks[bucket] = max(peaks[bucket], peak)
                                 energy[bucket] += peak.toDouble() * peak
                                 counts[bucket]++
                             }
-                            frame++
+                            frame += stride
                         }
                     }
                 } finally { codec.releaseOutputBuffer(index, false) }
                 outputDone = info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0
+                if (!outputDone && System.nanoTime() - lastPreview >= 350_000_000L) {
+                    lastPreview = System.nanoTime()
+                    onProgress(snapshot(), (info.presentationTimeUs.toDouble() / durationUs).toFloat().coerceIn(0f, 0.99f))
+                }
             }
         }
-        val levels = FloatArray(bars) { i ->
-            if (counts[i] == 0) 0f else (kotlin.math.sqrt(energy[i] / counts[i]) * 0.85 + peaks[i] * 0.15).toFloat()
-        }
-        val scale = (levels.maxOrNull() ?: 0f).coerceAtLeast(0.001f)
-        levels.map { (it / scale).coerceIn(0f, 1f) }
+        snapshot()
     } catch (e: CancellationException) {
         throw e
     } catch (e: Exception) {

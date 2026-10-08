@@ -1,32 +1,28 @@
-# DFUSE Tone Forge v0.6-beta
+# DFUSE Tone Forge v0.7-beta
 
-A larger continuous waveform makes quiet passages and transients easier to see.
-The compact editor adds 16× zoom, timeline scrolling, tap-to-seek, a live playback
-cursor, selection preview, and 0.1-second trim adjustments. Accepted selections
-are restored when reopening the editor, and short clips no longer hit the old
-1.5-second trim limit.
+- Seven taps on DFUSE unlock the full Settings page; the gear stays available.
+- Saved Purple, Teal, Ember, Blue, and White themes cover the app and editor.
+- Preferred save type appears first in the save dialog.
+- Preview looping and initial trim presets: full track, 5, 15, or 30 seconds.
+- M4A/AAC export quality: 96, 192, or 256 kbps (requested encoder bitrate).
+- Export fade in/out: off, 0.5, 1, or 2 seconds, limited for short clips.
+- Clear waveform cache and open the sound-setting permission screen.
+- Lighter waveform sample analysis, progressive display, and completed-waveform caching.
+- Website download and feature descriptions updated for this beta.
 
-Save clips as ringtones, notifications, or alarms. Choose Set as default now to
-apply the exported sound directly. When needed, Tone Forge opens Android's
-modify-system-settings permission screen and applies the pending choice on return.
+## Notes
 
-Playback preparation and metadata loading avoid blocking the editor. Playback
-stops when leaving the app. New tracks export their full range unless trimmed.
+Fades affect exported audio; editor preview plays the original selection.
+Trim presets apply when loading new tracks. Existing selections are preserved.
+Export currently uses M4A/AAC; MP3/WAV and file-picker saving are future work.
+Samsung device testing remains pending. Existing custom alarms, app notification
+channels, and secondary-SIM ringtones may retain separate sounds.
 
-## Validation and limitations
+## Build and validation
 
-- User confirmed the updated waveform and default notification sound on Motorola.
-- Source whitespace, installer behavior, and ZIP integrity checks passed.
-- Android build is required locally; no APK was built in this environment.
-- Samsung, Android 8/9, and default ringtone/alarm device checks are pending.
-- Default alarm changes do not override existing custom alarm sounds.
-- App notification channels and secondary-SIM ringtones may use separate settings.
-
-## Build for distribution
-
-Version name: 0.6-beta. Version code: 6. Release tag: v0.6-beta.
-
-In Android Studio use Build > Generate Signed App Bundle / APK > APK > release.
-Use the same signing key as previous releases so existing installations can update.
-Name the signed APK DFUSE-Tone-Forge-v0.6-beta.apk and attach it to the GitHub
-release tagged v0.6-beta with these notes. Keep signing credentials out of Git.
+Version: 0.7-beta. Version code: 7. Tag: v0.7-beta.
+This beta APK is signed with the build machine's Android debug key, matching
+Android Studio debug installs made using that same key.
+Source, installer, archive, and website checks were performed in preparation.
+The previous full Settings page compiled on the user's PC. The added export,
+fade, and playback settings require local build and device validation.

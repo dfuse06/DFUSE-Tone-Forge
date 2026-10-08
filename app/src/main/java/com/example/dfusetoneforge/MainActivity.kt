@@ -2,6 +2,8 @@ package com.example.dfusetoneforge
 
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
+import android.provider.Settings
 import android.media.MediaMetadataRetriever
 import android.os.Bundle
 import android.widget.Toast
@@ -22,6 +24,11 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -127,6 +134,8 @@ fun ToneForgeHome() {
 
     var dfuseTapCount by remember { mutableIntStateOf(0) }
     var showDfuseMode by remember { mutableStateOf(false) }
+    var settingsUnlocked by remember { mutableStateOf(prefs.getBoolean("settingsUnlocked", false)) }
+    var showSettings by remember { mutableStateOf(false) }
 
     val scope = rememberCoroutineScope()
     val pagerState = rememberPagerState(pageCount = { 2 })
@@ -183,6 +192,7 @@ fun ToneForgeHome() {
         ) {
             Spacer(modifier = Modifier.height(30.dp))
 
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Text(
                 text = "DFUSE",
                 color = MaterialTheme.colorScheme.primary,
@@ -206,13 +216,22 @@ fun ToneForgeHome() {
                             Toast.LENGTH_LONG
                         ).show()
 
+                        prefs.edit().putBoolean("settingsUnlocked", true).apply()
+                        settingsUnlocked = true
                         showDfuseMode = true
                     }
                 }
             )
 
+            Spacer(Modifier.weight(1f))
+            if (settingsUnlocked) {
+                IconButton(onClick = { showSettings = true }) {
+                    Icon(Icons.Filled.Settings, contentDescription = "Settings", tint = MaterialTheme.colorScheme.primary)
+                }
+            }
+            }
             Text(
-                text = "Tone Forge 0.6 Beta",
+                text = "Tone Forge 0.7 Beta",
                 color = MaterialTheme.colorScheme.onBackground,
                 fontSize = 30.sp,
                 fontWeight = FontWeight.Bold
@@ -270,8 +289,10 @@ fun ToneForgeHome() {
                                     forgedFile = null
 
                                     startMs = 0L
-                                    endMs = withContext(Dispatchers.IO) { readEditorAudioInfo(audioFile.absolutePath).durationMs }
-                                    hasTrim = false
+                                    val trackDuration = withContext(Dispatchers.IO) { readEditorAudioInfo(audioFile.absolutePath).durationMs }
+                                    val presetSeconds = prefs.getInt("trimPresetSeconds", 0)
+                                    endMs = if (presetSeconds > 0) minOf(trackDuration, presetSeconds * 1000L) else trackDuration
+                                    hasTrim = endMs < trackDuration
 
                                     statusText = "Audio ready.\nLoaded: ${cleanDisplayName(audioFile)}"
 
@@ -374,9 +395,12 @@ fun ToneForgeHome() {
             )
         }
 
+        if (showSettings && !showDfuseMode) {
+            ThemeSettingsDialog(onDismiss = { showSettings = false })
+        }
         if (showDfuseMode) {
             DfuseModeOverlay(
-                onDismiss = { showDfuseMode = false }
+                onDismiss = { showDfuseMode = false; showSettings = true }
             )
         }
     }
@@ -391,6 +415,8 @@ fun SaveChoiceDialog(
     onSaveAsNotification: () -> Unit,
     onSaveAsAlarm: () -> Unit
 ) {
+    val context = LocalContext.current
+    val preferred = context.getSharedPreferences("dfuse_prefs", Context.MODE_PRIVATE).getString("defaultSaveType", "RINGTONE")
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
@@ -410,25 +436,14 @@ fun SaveChoiceDialog(
                     Text("Set as default now")
                 }
                 Text("Default alarm affects alarms using the default sound. Existing custom alarms and app notification channels keep their own sounds.", fontSize = 12.sp)
-                Button(
-                    onClick = onSaveAsRingtone,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text("Ringtone")
-                }
-
-                Button(
-                    onClick = onSaveAsNotification,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text("Notification")
-                }
-
-                Button(
-                    onClick = onSaveAsAlarm,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Text("Alarm")
+                listOf(
+                    Triple("RINGTONE", "Ringtone", onSaveAsRingtone),
+                    Triple("NOTIFICATION", "Notification", onSaveAsNotification),
+                    Triple("ALARM", "Alarm", onSaveAsAlarm)
+                ).sortedBy { if (it.first == preferred) 0 else 1 }.forEach { (id, label, save) ->
+                    Button(onClick = save, modifier = Modifier.fillMaxWidth()) {
+                        Text(if (preferred == id) "$label · preferred" else label)
+                    }
                 }
             }
         },
@@ -939,5 +954,126 @@ private fun formatMs(ms: Long): String {
 fun ToneForgePreview() {
     DfuseToneforgeTheme {
         ToneForgeHome()
+    }
+}
+@Composable
+private fun ThemeSettingsDialog(onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    val prefs = remember(context) { context.getSharedPreferences("dfuse_prefs", Context.MODE_PRIVATE) }
+    var selected by remember { mutableStateOf(prefs.getString("appTheme", "purple") ?: "purple") }
+    var preferred by remember { mutableStateOf(prefs.getString("defaultSaveType", "RINGTONE") ?: "RINGTONE") }
+    var loop by remember { mutableStateOf(prefs.getBoolean("loopPreview", false)) }
+    var preset by remember { mutableIntStateOf(prefs.getInt("trimPresetSeconds", 0)) }
+    var bitrate by remember { mutableIntStateOf(prefs.getInt("exportBitrate", 192000)) }
+    var fadeIn by remember { mutableIntStateOf(prefs.getInt("fadeInMs", 0)) }
+    var fadeOut by remember { mutableIntStateOf(prefs.getInt("fadeOutMs", 0)) }
+    var cacheBusy by remember { mutableStateOf(false) }
+    var cacheStatus by remember { mutableStateOf("") }
+    val scope = rememberCoroutineScope()
+    Dialog(
+        onDismissRequest = onDismiss,
+        properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)
+    ) {
+        Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+            Column(Modifier.fillMaxSize().safeDrawingPadding()) {
+                Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(onClick = onDismiss) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    }
+                    Text("Settings", style = MaterialTheme.typography.headlineSmall)
+                }
+                HorizontalDivider()
+                Column(Modifier.fillMaxWidth().weight(1f).verticalScroll(rememberScrollState()).padding(20.dp)) {
+                    Text("Appearance", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.titleMedium)
+                    Spacer(Modifier.height(8.dp))
+                    Text("App theme", style = MaterialTheme.typography.headlineSmall)
+                    Text("Applies immediately to the app and audio editor. Your choice is saved.",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 8.dp, bottom = 16.dp))
+                    listOf("purple" to "Forge Purple", "teal" to "Neon Teal", "ember" to "Ember", "blue" to "Electric Blue", "white" to "White").forEach { (id, name) ->
+                        Card(Modifier.fillMaxWidth().padding(bottom = 10.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)) {
+                            Row(Modifier.fillMaxWidth().clickable {
+                                selected = id
+                                prefs.edit().putString("appTheme", id).apply()
+                            }.padding(horizontal = 12.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+                                RadioButton(selected = selected == id, onClick = {
+                                    selected = id
+                                    prefs.edit().putString("appTheme", id).apply()
+                                })
+                                Text(name, style = MaterialTheme.typography.titleMedium)
+                            }
+                        }
+                    }
+
+                    SettingsSection("Saving")
+                    Text("Preferred sound type")
+                    SettingsChoices(listOf("RINGTONE" to "Ringtone", "NOTIFICATION" to "Notification", "ALARM" to "Alarm"), preferred) {
+                        preferred = it; prefs.edit().putString("defaultSaveType", it).apply()
+                    }
+                    Text("Export format: M4A (AAC)", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("Export quality")
+                    SettingsChoices(listOf("96000" to "Small · 96 kbps", "192000" to "Balanced · 192 kbps", "256000" to "High · 256 kbps"), bitrate.toString()) {
+                        bitrate = it.toInt(); prefs.edit().putInt("exportBitrate", bitrate).apply()
+                    }
+                    SettingsSection("Editing & playback")
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text("Loop selection preview", modifier = Modifier.weight(1f))
+                        Switch(checked = loop, onCheckedChange = { loop = it; prefs.edit().putBoolean("loopPreview", it).apply() })
+                    }
+                    Text("Initial trim length for new tracks")
+                    SettingsChoices(listOf("0" to "Full track", "5" to "5 seconds", "15" to "15 seconds", "30" to "30 seconds"), preset.toString()) {
+                        preset = it.toInt(); prefs.edit().putInt("trimPresetSeconds", preset).apply()
+                    }
+                    Text("Fade in on export")
+                    SettingsChoices(listOf("0" to "Off", "500" to "0.5 seconds", "1000" to "1 second", "2000" to "2 seconds"), fadeIn.toString()) {
+                        fadeIn = it.toInt(); prefs.edit().putInt("fadeInMs", fadeIn).apply()
+                    }
+                    Text("Fade out on export")
+                    SettingsChoices(listOf("0" to "Off", "500" to "0.5 seconds", "1000" to "1 second", "2000" to "2 seconds"), fadeOut.toString()) {
+                        fadeOut = it.toInt(); prefs.edit().putInt("fadeOutMs", fadeOut).apply()
+                    }
+                    Text("Fades affect saved audio. Editor preview plays the original selection.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    SettingsSection("Storage & permissions")
+                    OutlinedButton(enabled = !cacheBusy, onClick = {
+                        cacheBusy = true
+                        scope.launch {
+                            try {
+                                val count = withContext(Dispatchers.IO) { clearWaveformCache(context.cacheDir) }
+                                cacheStatus = "Cleared $count cached waveforms. Audio files kept."
+                            } catch (e: Exception) { cacheStatus = "Could not clear cache: ${e.message}" }
+                            finally { cacheBusy = false }
+                        }
+                    }) { Text(if (cacheBusy) "Clearing…" else "Clear waveform cache") }
+                    if (cacheStatus.isNotEmpty()) Text(cacheStatus)
+                    OutlinedButton(onClick = {
+                        try {
+                            context.startActivity(Intent(Settings.ACTION_MANAGE_WRITE_SETTINGS, Uri.parse("package:${context.packageName}")))
+                        } catch (_: android.content.ActivityNotFoundException) {
+                            Toast.makeText(context, "Open your phone settings to allow modifying system settings.", Toast.LENGTH_LONG).show()
+                        }
+                    }) { Text("Sound-setting permission") }
+                    Text("Allows Tone Forge to set default sounds when you choose Set as default now.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun SettingsSection(title: String) {
+    HorizontalDivider(Modifier.padding(vertical = 20.dp))
+    Text(title, color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.titleLarge,
+        modifier = Modifier.padding(bottom = 12.dp))
+}
+
+@Composable
+private fun SettingsChoices(choices: List<Pair<String, String>>, selected: String, onSelect: (String) -> Unit) {
+    Column(Modifier.padding(vertical = 8.dp)) {
+        choices.forEach { (value, label) ->
+            Row(Modifier.fillMaxWidth().clickable { onSelect(value) }.padding(vertical = 2.dp), verticalAlignment = Alignment.CenterVertically) {
+                RadioButton(selected = selected == value, onClick = { onSelect(value) })
+                Text(label)
+            }
+        }
     }
 }

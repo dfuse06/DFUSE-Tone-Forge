@@ -3,7 +3,8 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>DFUSE Tone Forge</title>
+  <title>DFUSE Tone Forge — Android Audio Editor</title>
+  <meta name="description" content="Create custom Android ringtones, notifications and alarms with a continuous waveform editor, 16× zoom, precise trimming and in-app default sound settings." />
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
@@ -23,13 +24,13 @@
 
   <section class="hero">
     <div class="hero-content">
-      <div class="badge">Android Ringtone Forge 🔨</div>
+      <div class="badge">v0.7 Beta · Android audio editor</div>
 
       <h1><span>DFUSE</span><br />Tone Forge</h1>
 
       <p>
         Turn audio you own or have permission to use into custom ringtones,
-        notifications, and alarm sounds with a purple-forged Android editor.
+        notifications, and alarm sounds with a customizable Android editor.
       </p>
 
       <div class="buttons">
@@ -41,12 +42,15 @@
           See Features
         </a>
 
-       <a href="https://github.com/dfuse06/DFUSE-Tone-Forge/releases/latest"
+       <a href="https://github.com/dfuse06/DFUSE-Tone-Forge/releases/download/v0.7-beta/DFUSE-Tone-Forge-v0.7-beta.apk"
         class="btn download">
-        ⬇️ View latest release
+        ⬇️ Download v0.7 Beta APK
        </a>
-
-    <div class="hero-wave"></div>
+      </div>
+      <p class="install-note">Android 8.0 or newer. Download the APK and allow installation from your browser when prompted.</p>
+      <a href="https://github.com/dfuse06/DFUSE-Tone-Forge/releases/tag/v0.7-beta">Release notes</a>
+    </div>
+    <div class="hero-wave" aria-hidden="true"></div>
   </section>
 
   <section id="poster" class="poster-section">
@@ -64,29 +68,52 @@
 
       <div class="card">
         <h3>✂️ Trim</h3>
-        <p>Pick the perfect ringtone start and end point.</p>
+        <p>See a continuous waveform, zoom up to 16×, scroll through the track and adjust your trim in 0.1-second steps.</p>
       </div>
 
       <div class="card">
         <h3>⚒️ Forge</h3>
-        <p>Create your custom tone with a clean Android workflow.</p>
+        <p>Preview your selected clip before exporting. Keep the exact section you want.</p>
       </div>
 
       <div class="card">
         <h3>🔔 Notifications</h3>
-        <p>Save forged audio as notification sounds.</p>
+        <p>Save your clip and choose Set as default now to apply your notification sound directly.</p>
       </div>
 
       <div class="card">
         <h3>⏰ Alarms</h3>
-        <p>Build alarm sounds with DFUSE energy.</p>
+        <p>Export an alarm sound and apply it as the system default. Existing alarms with custom sounds keep their settings.</p>
       </div>
 
       <div class="card">
         <h3>📱 Ringtones</h3>
-        <p>Export and use your custom ringtone on Android.</p>
+        <p>Save to your public Ringtones folder and apply the default ringtone from Tone Forge.</p>
+      </div>
+      <div class="card">
+        <h3>⚙️ Personalize</h3>
+        <p>Unlock Settings by tapping DFUSE seven times. Use the gear afterward for Purple, Teal, Ember, Blue, or White themes and saved editing preferences.</p>
+      </div>
+      <div class="card">
+        <h3>🎚️ Export settings</h3>
+        <p>Choose M4A/AAC quality at 96, 192, or 256 kbps and fade in or out. Loop previews and start new tracks with a 5, 15, or 30-second selection.</p>
+      </div>
+      <div class="card">
+        <h3>🌊 Faster waveforms</h3>
+        <p>Waveforms build progressively with lighter sample analysis. Completed waveforms are cached for reopening, and Settings lets you clear that cache.</p>
       </div>
     </div>
+  </section>
+
+  <section class="features" aria-labelledby="setup-title">
+    <h2 id="setup-title">Make it. Set it. Hear it.</h2>
+    <ol class="setup-steps">
+      <li>Load your audio and choose Edit Audio.</li>
+      <li>Trim and preview the clip, then select Use selection.</li>
+      <li>Choose Forge, enable Set as default now, and pick Ringtone, Notification, or Alarm.</li>
+      <li>If Android asks, allow Modify system settings and return to Tone Forge.</li>
+    </ol>
+    <p class="compatibility-note">The new editor and default notification setting have been tested on Motorola. Samsung support uses Android’s standard sound APIs; Samsung device testing is pending. Individual app notifications and SIM ringtones may use separate settings.</p>
   </section>
 
   <section id="about" class="about">

@@ -264,3 +264,14 @@ display: none;
 border-radius: 18px;
 }
 }
+
+.install-note { font-size: 14px !important; line-height: 1.5 !important; }
+.hero-content > a { color: #c8a7ff; }
+.setup-steps { padding-left: 24px; color: #d8c9ff; line-height: 1.8; }
+.setup-steps li { margin-bottom: 10px; }
+.compatibility-note { color: #b9a7dd; line-height: 1.6; font-size: 14px; }
+a:focus-visible { outline: 3px solid #e2ceff; outline-offset: 5px; }
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  .btn { transition: none; }
+}

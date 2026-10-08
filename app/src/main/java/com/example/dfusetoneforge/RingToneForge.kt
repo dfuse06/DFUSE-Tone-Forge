@@ -4,6 +4,9 @@ import android.content.Context
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.transformer.AudioEncoderSettings
+import androidx.media3.transformer.DefaultEncoderFactory
+import androidx.media3.transformer.Effects
 import androidx.media3.transformer.Composition
 import androidx.media3.transformer.EditedMediaItem
 import androidx.media3.transformer.ExportException
@@ -69,14 +72,21 @@ suspend fun forgeRingtone(
         )
         .build()
 
+    val prefs = context.getSharedPreferences("dfuse_prefs", Context.MODE_PRIVATE)
+    val fadeIn = prefs.getInt("fadeInMs", 0).coerceIn(0, 2000)
+    val fadeOut = prefs.getInt("fadeOutMs", 0).coerceIn(0, 2000)
+    // Keep a PCM processor active even with fades off so export quality is encoded.
+    val audioProcessors = listOf(FadeAudioProcessor(endMs - startMs, fadeIn, fadeOut))
     val editedMediaItem = EditedMediaItem.Builder(mediaItem)
         .setRemoveVideo(true)
+        .setEffects(Effects(audioProcessors, emptyList()))
         .build()
 
     return runTransformer(
         context = context,
         editedMediaItem = editedMediaItem,
-        outputFile = outputFile
+        outputFile = outputFile,
+        bitrate = prefs.getInt("exportBitrate", 192000).coerceIn(96000, 256000)
     )
 }
 
@@ -84,11 +94,15 @@ suspend fun forgeRingtone(
 private suspend fun runTransformer(
     context: Context,
     editedMediaItem: EditedMediaItem,
-    outputFile: File
+    outputFile: File,
+    bitrate: Int = 192000
 ): File {
     return suspendCancellableCoroutine { continuation ->
         val transformer = Transformer.Builder(context)
             .setAudioMimeType(MimeTypes.AUDIO_AAC)
+            .setEncoderFactory(DefaultEncoderFactory.Builder(context)
+                .setRequestedAudioEncoderSettings(AudioEncoderSettings.Builder().setBitrate(bitrate).build())
+                .build())
             .addListener(object : Transformer.Listener {
                 override fun onCompleted(
                     composition: Composition,
