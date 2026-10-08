@@ -20,7 +20,6 @@ Download → Extract Audio → Edit Waveform → Trim → Forge Ringtone
 * Apply the chosen default sound from the app
 * Modify-system-settings permission flow with return-to-app handling
 * Samsung-compatible Android APIs (Samsung device testing pending)
-* Easter egg unlock: tap DFUSE seven times; Settings gear stays available
 * Five saved themes: Purple, Teal, Ember, Blue, and White
 * Progressive waveform generation with lighter analysis and waveform caching
 * Preferred save type, loop preview, and initial trim presets

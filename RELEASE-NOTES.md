@@ -1,6 +1,5 @@
 # DFUSE Tone Forge v0.7-beta
 
-- Seven taps on DFUSE unlock the full Settings page; the gear stays available.
 - Saved Purple, Teal, Ember, Blue, and White themes cover the app and editor.
 - Preferred save type appears first in the save dialog.
 - Preview looping and initial trim presets: full track, 5, 15, or 30 seconds.
